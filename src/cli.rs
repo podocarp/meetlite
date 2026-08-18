@@ -45,6 +45,22 @@ pub struct RecordArgs {
     /// Stop automatically after this many seconds. Omit to stop with Ctrl-C.
     #[arg(long)]
     pub duration: Option<u64>,
+
+    /// Do not capture the default microphone.
+    #[arg(long)]
+    pub no_microphone: bool,
+
+    /// Do not capture global system audio.
+    #[arg(long)]
+    pub no_system_audio: bool,
+
+    /// Override the configured microphone gain.
+    #[arg(long)]
+    pub microphone_gain: Option<f32>,
+
+    /// Override the configured system-audio gain.
+    #[arg(long)]
+    pub system_gain: Option<f32>,
 }
 
 #[derive(Debug, Args)]

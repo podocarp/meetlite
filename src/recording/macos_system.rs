@@ -5,25 +5,33 @@
 //! lets the recorder use ordinary Rust channels after capture ingress.
 
 use std::{
-    collections::VecDeque,
     ffi::{c_char, c_void, CStr},
     ptr::NonNull,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Instant,
 };
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
+use super::{AudioFrame, CaptureStatistics, SourceKind};
+
 const CALLBACK_QUEUE_CAPACITY: usize = 128;
 const ERROR_BUFFER_LENGTH: usize = 512;
 
 pub struct SystemAudioCapture {
-    receiver: Receiver<Vec<f32>>,
+    receiver: Receiver<AudioFrame>,
     context: Box<CallbackContext>,
-    handle: NonNull<NativeCapture>,
+    handle: Option<NonNull<NativeCapture>>,
+    dropped_frames: Arc<AtomicU64>,
 }
 
 struct CallbackContext {
-    sender: Sender<Vec<f32>>,
+    sender: Sender<AudioFrame>,
+    dropped_frames: Arc<AtomicU64>,
 }
 
 #[repr(C)]
@@ -45,7 +53,11 @@ unsafe extern "C" {
 impl SystemAudioCapture {
     pub fn start() -> Result<Self> {
         let (sender, receiver) = bounded(CALLBACK_QUEUE_CAPACITY);
-        let mut context = Box::new(CallbackContext { sender });
+        let dropped_frames = Arc::new(AtomicU64::new(0));
+        let mut context = Box::new(CallbackContext {
+            sender,
+            dropped_frames: Arc::clone(&dropped_frames),
+        });
         let mut error = [0 as c_char; ERROR_BUFFER_LENGTH];
         let handle = unsafe {
             meetlite_system_audio_start(
@@ -60,24 +72,43 @@ impl SystemAudioCapture {
         Ok(Self {
             receiver,
             context,
-            handle,
+            handle: Some(handle),
+            dropped_frames,
         })
     }
 
     pub fn sample_rate(&self) -> u32 {
-        unsafe { meetlite_system_audio_sample_rate(self.handle.as_ptr()) }.round() as u32
+        unsafe {
+            meetlite_system_audio_sample_rate(
+                self.handle.expect("capture handle is present").as_ptr(),
+            )
+        }
+        .round() as u32
     }
 
-    pub fn drain_into(&mut self, output: &mut VecDeque<f32>) {
-        while let Ok(samples) = self.receiver.try_recv() {
-            output.extend(samples);
+    pub fn drain_into(&mut self, output: &mut super::SourceBuffer) {
+        while let Ok(frame) = self.receiver.try_recv() {
+            output.push(frame);
+        }
+    }
+
+    pub fn stop(mut self, output: &mut super::SourceBuffer) -> CaptureStatistics {
+        if let Some(handle) = self.handle.take() {
+            unsafe { meetlite_system_audio_stop(handle.as_ptr()) };
+        }
+        self.drain_into(output);
+        CaptureStatistics {
+            dropped_callback_frames: self.dropped_frames.load(Ordering::Relaxed),
+            dropped_buffered_frames: output.dropped_frames(),
         }
     }
 }
 
 impl Drop for SystemAudioCapture {
     fn drop(&mut self) {
-        unsafe { meetlite_system_audio_stop(self.handle.as_ptr()) };
+        if let Some(handle) = self.handle.take() {
+            unsafe { meetlite_system_audio_stop(handle.as_ptr()) };
+        }
         // Keep the callback context alive until native capture has stopped.
         let _ = &self.context;
     }
@@ -90,7 +121,18 @@ unsafe extern "C" fn on_audio(samples: *const f32, sample_count: usize, context:
 
     let context = unsafe { &*(context as *const CallbackContext) };
     let samples = unsafe { std::slice::from_raw_parts(samples, sample_count) };
-    let _ = context.sender.try_send(samples.to_vec());
+    if context
+        .sender
+        .try_send(AudioFrame {
+            source: SourceKind::System,
+            captured_at: Instant::now(),
+            sample_rate: 48_000,
+            samples: samples.to_vec(),
+        })
+        .is_err()
+    {
+        context.dropped_frames.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn native_error(error: &[c_char]) -> anyhow::Error {

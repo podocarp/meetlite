@@ -25,8 +25,10 @@ player_pid=$!
 
 nix develop --command ./target/debug/meetlite record \
   --duration "$duration_seconds" \
+  --no-microphone \
   --output "$output_directory"
 
 wait "$player_pid" || true
 afinfo "$output_directory/audio.wav"
+test -s "$output_directory/metadata.json"
 printf 'Recording written to %s\n' "$output_directory/audio.wav"
