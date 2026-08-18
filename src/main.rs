@@ -1,8 +1,9 @@
 mod cli;
 mod config;
 mod recording;
+mod transcription;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Command, ConfigCommand};
 use config::Config;
@@ -28,10 +29,18 @@ fn main() -> Result<()> {
             let config = Config::load_if_present(cli.config.as_deref())?;
             recording::record(args, config.as_ref().map(|config| &config.recording))?;
         }
-        Command::Transcribe(_) => {
+        Command::Transcribe(args) => {
+            let input = args.input.as_deref().context(
+                "live transcription is not implemented yet; pass an audio file to `meetlite transcribe FILE`",
+            )?;
             let config = Config::load(cli.config.as_deref())?;
-            config.stt()?;
-            bail!("transcription is not implemented yet; the recorder is the next milestone")
+            let transcript =
+                transcription::transcribe_file(input, args.output.as_deref(), config.stt()?)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&transcript)?);
+            } else {
+                println!("{}", transcript.text);
+            }
         }
     }
 

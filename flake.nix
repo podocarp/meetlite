@@ -21,6 +21,7 @@
             rustc
             cargo
             rustfmt
+            whisper-cpp
           ];
 
           # cidre builds and links Objective-C shims against Apple frameworks.

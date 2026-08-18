@@ -48,6 +48,8 @@ impl Default for RecordingConfig {
 #[serde(deny_unknown_fields)]
 pub struct SttConfig {
     pub base_url: String,
+    #[serde(default = "default_transcription_path")]
+    pub transcription_path: String,
     pub model: String,
     pub language: Option<String>,
     #[serde(default = "default_response_format")]
@@ -156,6 +158,9 @@ impl Config {
 
         if let Some(stt) = &self.stt {
             validate_provider("stt", &stt.base_url, &stt.model, &stt.auth)?;
+            if !stt.transcription_path.starts_with('/') {
+                bail!("stt.transcription_path must start with /")
+            }
             if stt.response_format.trim().is_empty() {
                 bail!("stt.response_format must not be empty")
             }
@@ -182,6 +187,10 @@ fn default_system_gain() -> f32 {
 
 fn default_response_format() -> String {
     "verbose_json".into()
+}
+
+fn default_transcription_path() -> String {
+    "/audio/transcriptions".into()
 }
 
 fn validate_gain(name: &str, gain: f32) -> Result<()> {
@@ -288,6 +297,7 @@ mod tests {
             recording: RecordingConfig::default(),
             stt: Some(SttConfig {
                 base_url: "https://stt.example.test/v1".into(),
+                transcription_path: default_transcription_path(),
                 model: "whisper-test".into(),
                 language: None,
                 response_format: default_response_format(),
@@ -323,6 +333,18 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("environment variable name"));
+    }
+
+    #[test]
+    fn rejects_transcription_path_without_a_leading_slash() {
+        let mut config = config_with_stt(AuthConfig::None);
+        config.stt.as_mut().unwrap().transcription_path = "audio/transcriptions".into();
+
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("transcription_path"));
     }
 
     #[test]

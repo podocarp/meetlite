@@ -60,9 +60,8 @@ nix develop --command cargo run -- config path
 
 Set `MEETLITE_CONFIG` or pass `--config PATH` to use another file.
 
-`record` works without a config file. Add an `stt` section before using the
-future transcription commands. Reference API secrets by environment variable,
-not directly in the JSON file:
+`record` works without a config file. Add an `stt` section to transcribe files.
+Reference API secrets by environment variable, not directly in the JSON file:
 
 ```json
 {
@@ -75,6 +74,7 @@ not directly in the JSON file:
   },
   "stt": {
     "base_url": "https://stt.example.com/v1",
+    "transcription_path": "/audio/transcriptions",
     "model": "whisper-large-v3",
     "language": null,
     "response_format": "verbose_json",
@@ -146,6 +146,44 @@ bash scripts/record-beep-test.sh
 It prints the temporary recording path and inspects the resulting WAV with
 `afinfo`. Listen to the output file to confirm the beep is present.
 
+## Transcription
+
+Transcribe an existing WAV using the configured provider:
+
+```bash
+nix develop --command cargo run -- transcribe ./meeting/audio.wav
+```
+
+Meetlite writes the normalized result to `transcript.json` beside the input, or
+to the directory passed with `--output`. It preserves the original provider
+JSON under `raw_response` for provider-specific fields.
+
+For a local `whisper-cpp` server, the Nix development shell includes
+`whisper-server`. Start it with a downloaded compatible GGML model:
+
+```bash
+whisper-server --model /path/to/ggml-base.en.bin --port 8080
+```
+
+Configure its native endpoint without an API key:
+
+```json
+{
+  "stt": {
+    "base_url": "http://127.0.0.1:8080",
+    "transcription_path": "/inference",
+    "model": "local-whisper-cpp",
+    "language": "en",
+    "response_format": "verbose_json",
+    "auth": { "type": "none" }
+  }
+}
+```
+
+The default `transcription_path` is `/audio/transcriptions`, which is the
+OpenAI-compatible endpoint. `whisper-server` is a local test and development
+option; it requires a separately supplied model file.
+
 ## Current Status
 
 Implemented:
@@ -157,10 +195,11 @@ Implemented:
 - Mixed and single-source lossless WAV recording with acknowledged source
   shutdown and metadata artifacts.
 - JSON configuration initialization and validation.
+- File transcription through OpenAI-compatible multipart STT uploads, including
+  normalized `transcript.json` artifacts.
 
 Not implemented yet:
 
-- `transcribe` and external OpenAI-compatible STT uploads.
-- Live transcription, transcript artifacts, and LLM summaries.
+- Live transcription and LLM summaries.
 - Conditional resampling for devices that do not deliver 48 kHz, and
   cross-platform system capture.
