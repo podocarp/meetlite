@@ -5,6 +5,7 @@ set -euo pipefail
 # The delayed player gives Core Audio time to start and request permissions.
 readonly repo_root="$(git rev-parse --show-toplevel)"
 readonly fixture="$repo_root/beep-02.wav"
+readonly app="$repo_root/dist/Meetlite.app"
 readonly duration_seconds=8
 readonly playback_delay_seconds=2
 readonly temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/meetlite-beep-test.XXXXXX")"
@@ -15,7 +16,7 @@ if [[ ! -f "$fixture" ]]; then
   exit 1
 fi
 
-nix develop --command cargo build
+nix develop --command bash "$repo_root/scripts/build-macos-app.sh"
 
 (
   sleep "$playback_delay_seconds"
@@ -23,7 +24,7 @@ nix develop --command cargo build
 ) &
 player_pid=$!
 
-nix develop --command ./target/debug/meetlite record \
+"$app/Contents/MacOS/meetlite" record \
   --duration "$duration_seconds" \
   --no-microphone \
   --output "$output_directory"

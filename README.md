@@ -1,8 +1,8 @@
 # Meetlite
 
-Meetlite is a lightweight Rust meeting-recorder CLI. The current macOS spike
-captures the default microphone and system audio into a single local WAV file.
-It does not use a virtual audio device, FFmpeg, local AI models, or a GUI.
+Meetlite is a lightweight Rust meeting-recorder CLI. On macOS it captures the
+default microphone and system audio into a single local WAV file. It does not
+use a virtual audio device, FFmpeg, local AI models, or a GUI.
 
 ## Requirements
 
@@ -17,8 +17,10 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 ```
 
 The first recording may prompt for microphone and Audio Capture permission.
-Grant both permissions. If permission was previously denied, enable Meetlite's
-terminal process under **System Settings > Privacy & Security**.
+Grant both permissions. Audio Capture is granted to the signed
+`MeetliteCapture.app` companion, not the terminal or raw CLI binary. If it was
+previously denied, enable **Meetlite Capture** under **System Settings > Privacy
+& Security > Audio Capture**.
 
 ## Build
 
@@ -34,6 +36,43 @@ shell with:
 
 ```bash
 nix develop --command cargo run -- --help
+```
+
+Build the signed macOS app bundle:
+
+```bash
+nix develop --command bash scripts/build-macos-app.sh
+```
+
+This produces `dist/Meetlite.app` and its sibling `dist/MeetliteCapture.app`.
+Keep both apps together in a stable location such as `/Applications`; moving or
+rebuilding the capture app can cause macOS to ask for Audio Capture permission
+again. The CLI starts the capture app asynchronously through LaunchServices and
+receives PCM through an authenticated loopback-only connection. Run CLI commands
+through the outer app:
+
+```bash
+open -W dist/Meetlite.app --args record --duration 60
+```
+
+The app writes recording and transcript artifacts to `--output`; LaunchServices
+does not relay this CLI app's stdout to the invoking terminal.
+
+For development, the equivalent build-and-run command is:
+
+```bash
+nix develop --command bash scripts/run-macos-app.sh record --duration 60
+```
+
+The first bundled recording should prompt for Audio Capture permission. If it
+does not, enable **Meetlite Capture** under **System Settings > Privacy &
+Security > Audio Capture**, then restart the command. The build signs the inner
+capture app before sealing the outer app. Release builds should use a Developer
+ID certificate and notarize the final bundle:
+
+```bash
+MEETLITE_CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+  nix develop --command bash scripts/build-macos-app.sh
 ```
 
 Run the checks:
@@ -106,26 +145,26 @@ nix develop --command cargo run -- devices
 Record until Ctrl-C:
 
 ```bash
-nix develop --command cargo run -- record
+nix develop --command bash scripts/run-macos-app.sh record
 ```
 
 Record a fixed duration into a chosen output directory:
 
 ```bash
-nix develop --command cargo run -- record --duration 60 --output ./meeting
+nix develop --command bash scripts/run-macos-app.sh record --duration 60 --output ./meeting
 ```
 
 Record one source for microphone-only or system-only verification:
 
 ```bash
-nix develop --command cargo run -- record --no-system-audio --duration 10 --output ./mic-only
-nix develop --command cargo run -- record --no-microphone --duration 10 --output ./system-only
+nix develop --command bash scripts/run-macos-app.sh record --no-system-audio --duration 10 --output ./mic-only
+nix develop --command bash scripts/run-macos-app.sh record --no-microphone --duration 10 --output ./system-only
 ```
 
 Override the configured mixing gains for one recording:
 
 ```bash
-nix develop --command cargo run -- record --microphone-gain 0.9 --system-gain 0.7
+nix develop --command bash scripts/run-macos-app.sh record --microphone-gain 0.9 --system-gain 0.7
 ```
 
 The output directory is created by Meetlite and contains `audio.wav`, a mono
@@ -158,6 +197,18 @@ Meetlite writes the normalized result to `transcript.json` beside the input, or
 to the directory passed with `--output`. It preserves the original provider
 JSON under `raw_response` for provider-specific fields.
 
+Run live transcription while preserving the complete local recording:
+
+```bash
+dist/Meetlite.app/Contents/MacOS/meetlite transcribe --duration 60 --output ./live-meeting
+```
+
+Live mode emits fixed 15-second WAV chunks to one serialized upload worker. It
+writes each completed or failed upload to `transcript.jsonl`, prints completed
+chunk text with its recording timestamp, and writes the final combined
+`transcript.json` at stop. `audio.wav` remains the source of truth if a chunk
+must be retranscribed later.
+
 For a local `whisper-cpp` server, the Nix development shell includes
 `whisper-server`. Start it with a downloaded compatible GGML model:
 
@@ -189,7 +240,10 @@ option; it requires a separately supplied model file.
 Implemented:
 
 - macOS default microphone capture through CPAL.
-- macOS global system-audio capture through a native Core Audio process tap.
+- macOS global system-audio capture through a native Core Audio process tap in
+  the signed `MeetliteCapture.app` companion.
+- Authenticated loopback IPC from the companion to the CLI mixer; the companion
+  exits when the requesting CLI closes its connection.
 - Timestamp-aligned, bounded 20 ms mixing windows with fixed gains and peak
   limiting.
 - Mixed and single-source lossless WAV recording with acknowledged source
@@ -200,6 +254,6 @@ Implemented:
 
 Not implemented yet:
 
-- Live transcription and LLM summaries.
+- LLM summaries.
 - Conditional resampling for devices that do not deliver 48 kHz, and
   cross-platform system capture.

@@ -34,6 +34,20 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Internal macOS capture companion. Launched only by MeetliteCapture.app.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    CaptureAgent(CaptureAgentArgs),
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Args)]
+pub struct CaptureAgentArgs {
+    #[arg(long)]
+    pub port: u16,
+
+    #[arg(long)]
+    pub token: String,
 }
 
 #[derive(Debug, Args)]
@@ -71,6 +85,18 @@ pub struct TranscribeArgs {
     /// Directory where recording and transcript artifacts will be written.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// Stop live recording automatically after this many seconds.
+    #[arg(long)]
+    pub duration: Option<u64>,
+
+    /// Do not capture the default microphone in live mode.
+    #[arg(long)]
+    pub no_microphone: bool,
+
+    /// Do not capture global system audio in live mode.
+    #[arg(long)]
+    pub no_system_audio: bool,
 }
 
 #[derive(Debug, Subcommand)]

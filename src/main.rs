@@ -10,9 +10,20 @@ use config::Config;
 use cpal::traits::{DeviceTrait, HostTrait};
 
 fn main() -> Result<()> {
+    // LaunchServices passes a legacy process-serial argument to app executables.
+    // It is not part of Meetlite's CLI contract and would otherwise prevent the
+    // hidden capture-agent command from starting.
+    #[cfg(target_os = "macos")]
+    let arguments =
+        std::env::args_os().filter(|argument| !argument.to_string_lossy().starts_with("-psn_"));
+    #[cfg(target_os = "macos")]
+    let cli = Cli::parse_from(arguments);
+    #[cfg(not(target_os = "macos"))]
     let cli = Cli::parse();
 
     match cli.command {
+        #[cfg(target_os = "macos")]
+        Command::CaptureAgent(args) => recording::run_capture_agent(args.port, args.token)?,
         Command::Config {
             command: ConfigCommand::Init,
         } => {
@@ -30,12 +41,17 @@ fn main() -> Result<()> {
             recording::record(args, config.as_ref().map(|config| &config.recording))?;
         }
         Command::Transcribe(args) => {
-            let input = args.input.as_deref().context(
-                "live transcription is not implemented yet; pass an audio file to `meetlite transcribe FILE`",
-            )?;
             let config = Config::load(cli.config.as_deref())?;
-            let transcript =
-                transcription::transcribe_file(input, args.output.as_deref(), config.stt()?)?;
+            let transcript = match args.input.as_deref() {
+                Some(input) => {
+                    transcription::transcribe_file(input, args.output.as_deref(), config.stt()?)?
+                }
+                None => transcription::transcribe_live(
+                    args,
+                    Some(&config.recording),
+                    config.stt()?.clone(),
+                )?,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&transcript)?);
             } else {
@@ -77,7 +93,7 @@ fn list_devices() -> Result<()> {
     }
 
     #[cfg(target_os = "macos")]
-    println!("\nSystem audio:\n  Default system output (native Core Audio capture is pending)");
+    println!("\nSystem audio:\n  Default system output (captured by MeetliteCapture.app)");
 
     #[cfg(not(target_os = "macos"))]
     println!("\nSystem audio:\n  Not implemented for this platform.");

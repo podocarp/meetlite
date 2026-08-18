@@ -366,6 +366,33 @@ headers directly or use a small pure-Rust WAV crate; do not add FFmpeg.
   transcript assembly.
 - Implement `meetlite transcribe` with no input path.
 
+#### 5a. Signed macOS Capture Agent (Complete)
+
+- Recording coordination, microphone capture, mixing, local WAV writing, and
+  STT uploads remain in the `meetlite` CLI.
+- The macOS Core Audio process tap runs only in `MeetliteCapture.app`, a
+  companion with a distinct stable bundle identifier and bound `Info.plist`.
+  The release packaging supports a Developer ID identity; notarization remains
+  a release-distribution task.
+- The CLI starts the agent asynchronously through LaunchServices, authenticates
+  a loopback-only IPC connection with a one-time random token, and receives
+  timestamped PCM frames for the existing mixer.
+- The capture agent is distributed beside the outer app at a stable path. The
+  future setup command owns downloading, verification, and updates for that
+  path.
+
+#### 5b. Platform Agent Setup
+
+- Add `meetlite setup` to install or update the platform-specific capture agent
+  into a stable, versioned Meetlite cache directory.
+- Download a signed release manifest and agent archive over HTTPS; verify the
+  manifest signature and archive checksum before installation.
+- Never execute an agent extracted to a random temporary directory. Keep prior
+  verified versions for rollback if an update fails.
+- Report the installed agent version, signing status, and the exact TCC
+  permission users must grant. Keep the command no-op on platforms that do not
+  require a companion agent.
+
 ### 6. Cross-Platform Capture
 
 - Windows: microphone through CPAL; evaluate WASAPI loopback through a native

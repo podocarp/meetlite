@@ -14,7 +14,7 @@ use crate::config::{AuthConfig, SttConfig};
 const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-pub(super) fn transcribe(input: &Path, config: &SttConfig) -> Result<Transcript> {
+pub(crate) fn transcribe(input: &Path, config: &SttConfig) -> Result<Transcript> {
     let metadata = fs::metadata(input)
         .with_context(|| format!("could not read input audio file {}", input.display()))?;
     if !metadata.is_file() {

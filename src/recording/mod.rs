@@ -1,4 +1,6 @@
 #[cfg(target_os = "macos")]
+mod macos_capture_agent;
+#[cfg(target_os = "macos")]
 mod macos_system;
 mod microphone;
 
@@ -19,6 +21,10 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use crate::{cli::RecordArgs, config::RecordingConfig};
+#[cfg(target_os = "macos")]
+pub(crate) use macos_capture_agent::run_capture_agent;
+#[cfg(target_os = "macos")]
+use macos_capture_agent::AgentSystemAudioCapture;
 use microphone::MicrophoneCapture;
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -79,6 +85,11 @@ impl SourceBuffer {
         self.dropped_frames
     }
 
+    #[cfg(target_os = "macos")]
+    fn pop_frame(&mut self) -> Option<AudioFrame> {
+        self.frames.pop_front()
+    }
+
     fn last_end(&self) -> Option<Instant> {
         self.frames.back().map(AudioFrame::ends_at)
     }
@@ -135,6 +146,7 @@ struct Mixer {
     microphone_gain: f32,
     system_gain: f32,
     samples_written: usize,
+    emitted_samples: Vec<i16>,
 }
 
 impl Mixer {
@@ -146,6 +158,7 @@ impl Mixer {
             microphone_gain,
             system_gain,
             samples_written: 0,
+            emitted_samples: Vec::new(),
         }
     }
 
@@ -214,37 +227,67 @@ impl Mixer {
                 .min(WINDOW_SAMPLES)
         });
         for sample in mixed.into_iter().take(remaining) {
+            let sample = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
             writer
-                .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)
+                .write_sample(sample)
                 .context("could not write WAV sample")?;
+            self.emitted_samples.push(sample);
         }
         self.samples_written += remaining;
         self.next_window += WINDOW_DURATION;
         Ok(())
     }
+
+    fn take_emitted_samples(&mut self) -> Vec<i16> {
+        std::mem::take(&mut self.emitted_samples)
+    }
 }
 
 pub fn record(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()> {
+    record_with_samples(args, config, |_| {}, |_| {}).map(|_| ())
+}
+
+#[derive(Clone)]
+pub struct RecordingOutput {
+    pub output_dir: PathBuf,
+    pub audio_file: PathBuf,
+}
+
+pub fn record_with_samples(
+    args: RecordArgs,
+    config: Option<&RecordingConfig>,
+    on_started: impl FnOnce(&RecordingOutput),
+    on_samples: impl FnMut(&[i16]),
+) -> Result<RecordingOutput> {
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (args, config);
+        let _ = (args, config, on_started, on_samples);
         bail!("system-audio recording is currently supported only on macOS")
     }
 
     #[cfg(target_os = "macos")]
     {
-        record_macos(args, config)
+        record_macos(args, config, on_started, on_samples)
     }
 }
 
 #[cfg(target_os = "macos")]
-fn record_macos(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()> {
+fn record_macos(
+    args: RecordArgs,
+    config: Option<&RecordingConfig>,
+    on_started: impl FnOnce(&RecordingOutput),
+    mut on_samples: impl FnMut(&[i16]),
+) -> Result<RecordingOutput> {
     if args.no_microphone && args.no_system_audio {
         bail!("at least one audio source must be enabled")
     }
 
     let output_dir = output_dir(args.output.as_deref())?;
     let output_file = output_dir.join("audio.wav");
+    on_started(&RecordingOutput {
+        output_dir: output_dir.clone(),
+        audio_file: output_file.clone(),
+    });
     let microphone_gain = args
         .microphone_gain
         .unwrap_or_else(|| config.map_or(MIC_GAIN, |config| config.microphone_gain));
@@ -276,7 +319,7 @@ fn record_macos(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()
         bail!("microphone does not deliver 48000 Hz; resampling is not implemented yet")
     }
     let mut system = (!args.no_system_audio)
-        .then(macos_system::SystemAudioCapture::start)
+        .then(AgentSystemAudioCapture::start)
         .transpose()?;
     if system
         .as_ref()
@@ -309,6 +352,8 @@ fn record_macos(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()
     {
         drain_sources(&mut microphone, &mut system, &mut mixer);
         mixer.write_ready(&mut writer, Instant::now(), sample_limit)?;
+        let samples = mixer.take_emitted_samples();
+        on_samples(&samples);
         thread::sleep(Duration::from_millis(5));
     }
 
@@ -319,6 +364,8 @@ fn record_macos(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()
         .map(|capture| capture.stop(&mut mixer.microphone));
     let system_stats = system.take().map(|capture| capture.stop(&mut mixer.system));
     mixer.flush(&mut writer, sample_limit)?;
+    let samples = mixer.take_emitted_samples();
+    on_samples(&samples);
     writer.finalize().context("could not finalize WAV file")?;
 
     write_metadata(
@@ -340,13 +387,16 @@ fn record_macos(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()
         },
     )?;
     println!("Saved {}", output_file.display());
-    Ok(())
+    Ok(RecordingOutput {
+        output_dir,
+        audio_file: output_file,
+    })
 }
 
 #[cfg(target_os = "macos")]
 fn drain_sources(
     microphone: &mut Option<MicrophoneCapture>,
-    system: &mut Option<macos_system::SystemAudioCapture>,
+    system: &mut Option<AgentSystemAudioCapture>,
     mixer: &mut Mixer,
 ) {
     if let Some(capture) = microphone {
