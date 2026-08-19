@@ -1,8 +1,12 @@
+#[cfg(target_os = "linux")]
+mod linux_system;
 #[cfg(target_os = "macos")]
 mod macos_capture_agent;
 #[cfg(target_os = "macos")]
 mod macos_system;
 mod microphone;
+#[cfg(target_os = "linux")]
+mod pulse_system;
 
 use std::{
     collections::VecDeque,
@@ -26,6 +30,11 @@ pub(crate) use macos_capture_agent::run_capture_agent;
 #[cfg(target_os = "macos")]
 use macos_capture_agent::AgentSystemAudioCapture;
 use microphone::MicrophoneCapture;
+
+#[cfg(target_os = "macos")]
+type SystemAudioCapture = AgentSystemAudioCapture;
+#[cfg(target_os = "linux")]
+type SystemAudioCapture = linux_system::SystemAudioCapture;
 
 const SAMPLE_RATE: u32 = 48_000;
 const WINDOW_SAMPLES: usize = 960;
@@ -259,20 +268,20 @@ pub fn record_with_samples(
     on_started: impl FnOnce(&RecordingOutput),
     on_samples: impl FnMut(&[i16]),
 ) -> Result<RecordingOutput> {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (args, config, on_started, on_samples);
-        bail!("system-audio recording is currently supported only on macOS")
+        bail!("recording is currently supported only on macOS and Linux")
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        record_macos(args, config, on_started, on_samples)
+        record_platform(args, config, on_started, on_samples)
     }
 }
 
-#[cfg(target_os = "macos")]
-fn record_macos(
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn record_platform(
     args: RecordArgs,
     config: Option<&RecordingConfig>,
     on_started: impl FnOnce(&RecordingOutput),
@@ -319,7 +328,7 @@ fn record_macos(
         bail!("microphone does not deliver 48000 Hz; resampling is not implemented yet")
     }
     let mut system = (!args.no_system_audio)
-        .then(AgentSystemAudioCapture::start)
+        .then(|| start_system_audio(config))
         .transpose()?;
     if system
         .as_ref()
@@ -393,10 +402,10 @@ fn record_macos(
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn drain_sources(
     microphone: &mut Option<MicrophoneCapture>,
-    system: &mut Option<AgentSystemAudioCapture>,
+    system: &mut Option<SystemAudioCapture>,
     mixer: &mut Mixer,
 ) {
     if let Some(capture) = microphone {
@@ -404,6 +413,20 @@ fn drain_sources(
     }
     if let Some(capture) = system {
         capture.drain_into(&mut mixer.system);
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn start_system_audio(config: Option<&RecordingConfig>) -> Result<SystemAudioCapture> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = config;
+        AgentSystemAudioCapture::start()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        SystemAudioCapture::start(config.and_then(|config| config.system_device.as_deref()))
     }
 }
 

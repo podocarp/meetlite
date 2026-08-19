@@ -9,7 +9,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleFormat, Stream,
+    SampleFormat, SampleRate, Stream,
 };
 use crossbeam_channel::{bounded, Receiver};
 
@@ -36,8 +36,18 @@ impl MicrophoneCapture {
                 .context("no default microphone device is available")?,
         };
         let config = device
-            .default_input_config()
-            .context("could not get microphone input configuration")?;
+            .supported_input_configs()
+            .context("could not enumerate microphone input configurations")?
+            .find(|config| {
+                config.min_sample_rate().0 <= super::SAMPLE_RATE
+                    && config.max_sample_rate().0 >= super::SAMPLE_RATE
+                    && matches!(
+                        config.sample_format(),
+                        SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+                    )
+            })
+            .context("microphone does not support 48000 Hz in f32, i16, or u16 PCM")?
+            .with_sample_rate(SampleRate(super::SAMPLE_RATE));
         let sample_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
         let (sender, receiver) = bounded(128);

@@ -35,5 +35,22 @@
             export MACOSX_DEPLOYMENT_TARGET=14.4
           '';
         };
+
+      devShell.x86_64-linux =
+        let
+          pkgs = import nixpkgs {
+            system = "x86_64-linux";
+          };
+        in
+        pkgs.mkShell {
+          buildInputs = with pkgs; [
+            alsa-lib
+            cargo
+            pkg-config
+            pulseaudio
+            rustc
+            rustfmt
+          ];
+        };
     };
 }

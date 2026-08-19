@@ -397,8 +397,9 @@ headers directly or use a small pure-Rust WAV crate; do not add FFmpeg.
 
 - Windows: microphone through CPAL; evaluate WASAPI loopback through a native
   implementation or a proven Rust binding.
-- Linux: microphone through CPAL; add PipeWire/PulseAudio monitor-source
-  support.
+- Linux: microphone through CPAL, default PulseAudio monitor capture, and
+  explicit ALSA PCM input fallback are complete. PipeWire works through its
+  PulseAudio compatibility server; native PipeWire support remains optional.
 - Keep platform code behind `SystemAudioSource`; preserve the mixer, files,
   config, and STT interfaces unchanged.
 

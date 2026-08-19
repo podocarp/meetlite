@@ -1,8 +1,7 @@
 # Meetlite
 
 > [!NOTE]
-> Meetlite is still heavily WIP and not ready for release yet. It currently only
-> works on MacOS but other platforms are planned additions.
+> Meetlite is still heavily WIP and not ready for release yet.
 
 Meetlite is a simple CLI meeting recorder and optional transcriber and
 summarizer. It's born out of my frustration at the lack of a simple,

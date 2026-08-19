@@ -97,7 +97,12 @@ fn list_devices() -> Result<()> {
     #[cfg(target_os = "macos")]
     println!("\nSystem audio:\n  Default system output (captured by MeetliteCapture.app)");
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    println!(
+        "\nSystem audio:\n  Default PulseAudio monitor, with recording.system_device as an ALSA fallback."
+    );
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     println!("\nSystem audio:\n  Not implemented for this platform.");
 
     Ok(())

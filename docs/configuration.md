@@ -37,6 +37,13 @@ Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
 `recording` is optional. The recorder currently requires `sample_rate` to be
 `48000`. Device names come from `meetlite devices`.
 
+On Linux, Meetlite first records the current default PulseAudio sink monitor,
+with no extra configuration. This also works with PipeWire when its
+PulseAudio-compatibility server is running. If no PulseAudio monitor is
+available, configure `recording.system_device` as an ALSA PCM fallback. For an
+ALSA loopback card, use the capture side paired with your playback device, for
+example `hw:Loopback,1,0` when audio is sent to `hw:Loopback,0,0`.
+
 `stt` is required only for transcription. `base_url` must start with `http://`
 or `https://`; `transcription_path` defaults to `/audio/transcriptions`.
 
