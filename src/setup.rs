@@ -16,8 +16,8 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const MANIFEST_URL: &str =
-    "https://github.com/podocarp/meetlite/releases/latest/download/MeetliteCapture.manifest.json";
+const MANIFEST_URL_PREFIX: &str =
+    "https://github.com/podocarp/meetlite/releases/latest/download/MeetliteCapture-macos-";
 const PINNED_PUBLIC_KEY: &str = "ceaMls+PPX9aKIWeBNhsAmyqv4OJxnQehljN/Gnh1rE=";
 const APP_NAME: &str = "MeetliteCapture.app";
 
@@ -93,6 +93,19 @@ fn validate_value(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn manifest_url_for_architecture(architecture: &str) -> Result<String> {
+    match architecture {
+        "aarch64" | "x86_64" => Ok(format!("{MANIFEST_URL_PREFIX}{architecture}.manifest.json")),
+        _ => bail!(
+            "unsupported macOS target architecture {architecture:?}; no matching MeetliteCapture release is available"
+        ),
+    }
+}
+
+fn local_manifest_url() -> Result<String> {
+    manifest_url_for_architecture(std::env::consts::ARCH)
+}
+
 fn verify_archive_checksum(archive: &[u8], expected: &str) -> Result<()> {
     let actual = format!("{:x}", Sha256::digest(archive));
     if actual != expected {
@@ -121,7 +134,8 @@ pub fn run() -> Result<()> {
         .build()
         .context("could not create release download client")?;
     println!("Downloading the latest MeetliteCapture release manifest...");
-    let manifest: Manifest = serde_json::from_slice(&download(&client, MANIFEST_URL)?)
+    let manifest_url = local_manifest_url()?;
+    let manifest: Manifest = serde_json::from_slice(&download(&client, &manifest_url)?)
         .context("release manifest is invalid JSON")?;
     manifest.verify_signature()?;
     let archive = download(&client, &manifest.archive_url)?;
@@ -292,6 +306,19 @@ mod tests {
     #[test]
     fn checksum_verification_rejects_wrong_archive() {
         assert!(verify_archive_checksum(b"archive", &"0".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn manifest_url_matches_supported_macos_architectures() {
+        assert_eq!(
+            manifest_url_for_architecture("aarch64").unwrap(),
+            "https://github.com/podocarp/meetlite/releases/latest/download/MeetliteCapture-macos-aarch64.manifest.json"
+        );
+        assert_eq!(
+            manifest_url_for_architecture("x86_64").unwrap(),
+            "https://github.com/podocarp/meetlite/releases/latest/download/MeetliteCapture-macos-x86_64.manifest.json"
+        );
+        assert!(manifest_url_for_architecture("arm").is_err());
     }
 
     #[test]

@@ -34,9 +34,13 @@ notarized and do not have stable Developer ID TCC behavior across updates.
 
 ## Release Process
 
-`.github/workflows/release-macos.yml` runs on pushed `v*` tags. It builds an
-ad-hoc agent, creates `MeetliteCapture.app.zip`, signs the canonical manifest,
-and publishes both assets to GitHub Releases.
+`.github/workflows/release-macos.yml` runs on pushed `v*` tags. Its native
+macOS matrix builds `aarch64` on `macos-14` and `x86_64` on `macos-13`. Each
+build publishes `meetlite-macos-<architecture>.zip`,
+`MeetliteCapture-macos-<architecture>.app.zip`, and
+`MeetliteCapture-macos-<architecture>.manifest.json`. The workflow creates or
+views the release before uploading with `--clobber`, so matrix jobs do not race
+to create it.
 
 - Required GitHub secret: `MEETLITE_MANIFEST_SIGNING_KEY`, a base64-encoded PEM
   Ed25519 private key.
@@ -61,6 +65,16 @@ capture app before packaging it and retain manifest verification.
 nix develop --command cargo fmt --check
 nix develop --command cargo test
 nix develop --command bash scripts/build-macos-app.sh
+```
+
+To build the CLI from source, use macOS 14.4 or later, full Xcode, and
+[Nix with flakes enabled](https://nixos.org/download/):
+
+```bash
+git clone https://github.com/podocarp/meetlite.git
+cd meetlite
+nix develop --command cargo install --path . --root "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Use `scripts/record-beep-test.sh` for a manual system-audio smoke test. Run

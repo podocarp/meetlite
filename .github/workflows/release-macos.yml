@@ -1,4 +1,4 @@
-name: Release macOS capture agent
+name: Release macOS
 
 on:
   push:
@@ -10,12 +10,24 @@ permissions:
 
 jobs:
   release-capture-agent:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            architecture: aarch64
+            uname_architecture: arm64
+          - runner: macos-13
+            architecture: x86_64
+            uname_architecture: x86_64
+    runs-on: ${{ matrix.runner }}
     env:
       MEETLITE_MANIFEST_SIGNING_KEY: ${{ secrets.MEETLITE_MANIFEST_SIGNING_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.uname_architecture }}"
       - name: Require manifest signing secret
         run: |
           test -n "$MEETLITE_MANIFEST_SIGNING_KEY"
@@ -28,11 +40,16 @@ jobs:
       - name: Package ad-hoc capture agent and sign manifest
         env:
           TAG: ${{ github.ref_name }}
+          ARCHITECTURE: ${{ matrix.architecture }}
         run: |
-          ditto -c -k --sequesterRsrc --keepParent dist/MeetliteCapture.app MeetliteCapture.app.zip
-          ARCHIVE_SHA256="$(shasum -a 256 MeetliteCapture.app.zip | cut -d ' ' -f 1)"
-          ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/MeetliteCapture.app.zip"
-          export TAG ARCHIVE_SHA256 ARCHIVE_URL
+          CLI_ARCHIVE="meetlite-macos-$ARCHITECTURE.zip"
+          AGENT_ARCHIVE="MeetliteCapture-macos-$ARCHITECTURE.app.zip"
+          MANIFEST="MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
+          ditto -c -k --sequesterRsrc --keepParent target/release/meetlite "$CLI_ARCHIVE"
+          ditto -c -k --sequesterRsrc --keepParent dist/MeetliteCapture.app "$AGENT_ARCHIVE"
+          ARCHIVE_SHA256="$(shasum -a 256 "$AGENT_ARCHIVE" | cut -d ' ' -f 1)"
+          ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/$AGENT_ARCHIVE"
+          export TAG ARCHIVE_SHA256 ARCHIVE_URL MANIFEST
           "$RUNNER_TEMP/manifest-signer/bin/python" - <<'PY'
           import base64
           import json
@@ -49,7 +66,7 @@ jobs:
           )
           payload = "version={version}\narchive_url={archive_url}\narchive_sha256={archive_sha256}\n".format(**manifest).encode()
           manifest["signature"] = base64.b64encode(key.sign(payload)).decode()
-          with open("MeetliteCapture.manifest.json", "w", encoding="ascii") as output:
+          with open(os.environ["MANIFEST"], "w", encoding="ascii") as output:
               json.dump(manifest, output, separators=(",", ":"), sort_keys=True)
               output.write("\n")
           PY
@@ -57,4 +74,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" --generate-notes MeetliteCapture.app.zip MeetliteCapture.manifest.json
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              break
+            fi
+            gh release create "$TAG" --generate-notes >/dev/null 2>&1 || true
+            sleep 2
+          done
+          gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" --clobber \
+            "meetlite-macos-$ARCHITECTURE.zip" \
+            "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
+            "MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
