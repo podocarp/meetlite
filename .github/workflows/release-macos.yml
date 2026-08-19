@@ -21,6 +21,8 @@ jobs:
           test -n "$MEETLITE_MANIFEST_SIGNING_KEY"
       - name: Build ad-hoc signed apps
         run: bash scripts/build-macos-app.sh
+      - name: Install manifest signer
+        run: python3 -m pip install --disable-pip-version-check 'cryptography==45.0.6'
       - name: Package ad-hoc capture agent and sign manifest
         env:
           TAG: ${{ github.ref_name }}
@@ -29,22 +31,22 @@ jobs:
           ARCHIVE_SHA256="$(shasum -a 256 MeetliteCapture.app.zip | cut -d ' ' -f 1)"
           ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/MeetliteCapture.app.zip"
           export TAG ARCHIVE_SHA256 ARCHIVE_URL
-          printf '%s' "$MEETLITE_MANIFEST_SIGNING_KEY" | base64 -D > "$RUNNER_TEMP/manifest-signing-key.pem"
-          printf 'version=%s\narchive_url=%s\narchive_sha256=%s\n' "$TAG" "$ARCHIVE_URL" "$ARCHIVE_SHA256" > "$RUNNER_TEMP/manifest.payload"
-          # macOS runners use LibreSSL, whose pkeyutl signs Ed25519 input
-          # directly and does not support OpenSSL 3's -rawin flag.
-          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/manifest-signing-key.pem" -in "$RUNNER_TEMP/manifest.payload" -out "$RUNNER_TEMP/manifest.signature"
-          export MANIFEST_SIGNATURE="$(base64 < "$RUNNER_TEMP/manifest.signature" | tr -d '\n')"
           python3 - <<'PY'
+          import base64
           import json
           import os
+          from cryptography.hazmat.primitives import serialization
 
           manifest = {
               "version": os.environ["TAG"],
               "archive_url": os.environ["ARCHIVE_URL"],
               "archive_sha256": os.environ["ARCHIVE_SHA256"],
-              "signature": os.environ["MANIFEST_SIGNATURE"],
           }
+          key = serialization.load_pem_private_key(
+              base64.b64decode(os.environ["MEETLITE_MANIFEST_SIGNING_KEY"]), password=None
+          )
+          payload = "version={version}\narchive_url={archive_url}\narchive_sha256={archive_sha256}\n".format(**manifest).encode()
+          manifest["signature"] = base64.b64encode(key.sign(payload)).decode()
           with open("MeetliteCapture.manifest.json", "w", encoding="ascii") as output:
               json.dump(manifest, output, separators=(",", ":"), sort_keys=True)
               output.write("\n")
