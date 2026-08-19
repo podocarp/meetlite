@@ -25,23 +25,21 @@ jobs:
       MEETLITE_MANIFEST_SIGNING_KEY: ${{ secrets.MEETLITE_MANIFEST_SIGNING_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: cachix/install-nix-action@v31
       - name: Verify runner architecture
         run: test "$(uname -m)" = "${{ matrix.uname_architecture }}"
       - name: Require manifest signing secret
         run: |
           test -n "$MEETLITE_MANIFEST_SIGNING_KEY"
       - name: Build ad-hoc signed apps
-        run: bash scripts/build-macos-app.sh
-      - name: Install manifest signer
-        run: |
-          python3 -m venv "$RUNNER_TEMP/manifest-signer"
-          "$RUNNER_TEMP/manifest-signer/bin/pip" install --disable-pip-version-check 'cryptography==45.0.6'
+        run: nix develop --command bash scripts/build-macos-app.sh
       - name: Package ad-hoc capture agent and sign manifest
         env:
           TAG: ${{ github.ref_name }}
           ARCHITECTURE: ${{ matrix.architecture }}
         run: |
+          nix develop --command bash <<'BASH'
+          set -euo pipefail
           CLI_ARCHIVE="meetlite-macos-$ARCHITECTURE.zip"
           AGENT_ARCHIVE="MeetliteCapture-macos-$ARCHITECTURE.app.zip"
           MANIFEST="MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
@@ -50,7 +48,7 @@ jobs:
           ARCHIVE_SHA256="$(shasum -a 256 "$AGENT_ARCHIVE" | cut -d ' ' -f 1)"
           ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/$AGENT_ARCHIVE"
           export TAG ARCHIVE_SHA256 ARCHIVE_URL MANIFEST
-          "$RUNNER_TEMP/manifest-signer/bin/python" - <<'PY'
+          python3 - <<'PY'
           import base64
           import json
           import os
@@ -70,12 +68,15 @@ jobs:
               json.dump(manifest, output, separators=(",", ":"), sort_keys=True)
               output.write("\n")
           PY
+          BASH
       - name: Publish GitHub release assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           ARCHITECTURE: ${{ matrix.architecture }}
         run: |
+          nix develop --command bash <<'BASH'
+          set -euo pipefail
           for _ in 1 2 3 4 5; do
             if gh release view "$TAG" >/dev/null 2>&1; then
               break
@@ -88,3 +89,4 @@ jobs:
            "meetlite-macos-$ARCHITECTURE.zip" \
            "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
            "MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
+          BASH

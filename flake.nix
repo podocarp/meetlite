@@ -8,11 +8,11 @@
 
   outputs =
     { nixpkgs, ... }:
-    {
-      devShell.aarch64-darwin =
+    let
+      darwinShell = system:
         let
           pkgs = import nixpkgs {
-            system = "aarch64-darwin";
+            inherit system;
             config.allowUnfree = true;
           };
         in
@@ -20,6 +20,8 @@
           buildInputs = with pkgs; [
             rustc
             cargo
+            gh
+            python3Packages.cryptography
             rustfmt
             whisper-cpp
           ];
@@ -35,6 +37,11 @@
             export MACOSX_DEPLOYMENT_TARGET=14.4
           '';
         };
+    in
+    {
+      devShell.aarch64-darwin = darwinShell "aarch64-darwin";
+
+      devShell.x86_64-darwin = darwinShell "x86_64-darwin";
 
       devShell.x86_64-linux =
         let
@@ -45,7 +52,9 @@
         pkgs.mkShell {
           buildInputs = with pkgs; [
             alsa-lib
+            binutils
             cargo
+            gh
             pkg-config
             pulseaudio
             rustc
