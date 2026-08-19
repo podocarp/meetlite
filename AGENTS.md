@@ -67,16 +67,6 @@ nix develop --command cargo test
 nix develop --command bash scripts/build-macos-app.sh
 ```
 
-To build the CLI from source, use macOS 14.4 or later, full Xcode, and
-[Nix with flakes enabled](https://nixos.org/download/):
-
-```bash
-git clone https://github.com/podocarp/meetlite.git
-cd meetlite
-nix develop --command cargo install --path . --root "$HOME/.local"
-export PATH="$HOME/.local/bin:$PATH"
-```
-
 Use `scripts/record-beep-test.sh` for a manual system-audio smoke test. Run
 `meetlite setup` against published releases to validate installer updates. Do
 not use the archived Meetily application as a runtime dependency; it is a

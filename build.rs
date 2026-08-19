@@ -2,7 +2,6 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rerun-if-changed=src/recording/macos_system.m");
-        println!("cargo:rerun-if-changed=Info.plist");
         println!("cargo:rerun-if-changed=MeetliteCapture-Info.plist");
         println!("cargo:rerun-if-env-changed=MEETLITE_EMBEDDED_INFO_PLIST");
         cc::Build::new()
@@ -15,12 +14,11 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=AudioToolbox");
         println!("cargo:rustc-link-lib=framework=CoreAudio");
         println!("cargo:rustc-link-lib=framework=Foundation");
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let info_plist = std::env::var("MEETLITE_EMBEDDED_INFO_PLIST")
-            .unwrap_or_else(|_| format!("{manifest_dir}/Info.plist"));
-        println!(
-            "cargo:rustc-link-arg=-Wl,-sectcreate,__TEXT,__info_plist,{}",
-            info_plist
-        );
+        if let Ok(info_plist) = std::env::var("MEETLITE_EMBEDDED_INFO_PLIST") {
+            println!(
+                "cargo:rustc-link-arg=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+                info_plist
+            );
+        }
     }
 }

@@ -221,21 +221,18 @@ fn capture_agent_path() -> Result<PathBuf> {
     let macos = executable
         .parent()
         .context("meetlite executable has no parent directory")?;
-    let contents = macos
-        .parent()
-        .context("meetlite executable is not in an app bundle")?;
-    let app = contents
-        .parent()
-        .context("meetlite executable is not in an app bundle")?;
-    let agent = app.with_file_name("MeetliteCapture.app");
-    if !agent.join("Contents/MacOS/meetlite").is_file() {
+    let sibling_agent = macos.join("MeetliteCapture.app");
+    if sibling_agent.join("Contents/MacOS/meetlite").is_file() {
+        return Ok(sibling_agent);
+    }
+    if !sibling_agent.join("Contents/MacOS/meetlite").is_file() {
         bail!(
-            "MeetliteCapture.app is unavailable at {} or {}; run `meetlite setup` or use the packaged Meetlite.app",
+            "MeetliteCapture.app is unavailable at {} or {}; run `meetlite setup` or place it beside the meetlite executable",
             installed.display(),
-            agent.display()
+            sibling_agent.display()
         )
     }
-    Ok(agent)
+    Ok(sibling_agent)
 }
 
 pub fn run_capture_agent(port: u16, token: String) -> Result<()> {
