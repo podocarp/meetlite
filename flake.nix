@@ -3,16 +3,15 @@
   nixConfig.bash-prompt = "[nix develop] ";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    nixpkgs-intel-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
 
   };
 
   outputs =
-    { nixpkgs, nixpkgs-intel-darwin, ... }:
+    { nixpkgs, ... }:
     let
       darwinShell = system:
         let
-          pkgs = import (if system == "x86_64-darwin" then nixpkgs-intel-darwin else nixpkgs) {
+          pkgs = import nixpkgs {
             inherit system;
             config.allowUnfree = true;
           };
@@ -40,8 +39,6 @@
     in
     {
       devShell.aarch64-darwin = darwinShell "aarch64-darwin";
-
-      devShell.x86_64-darwin = darwinShell "x86_64-darwin";
 
       devShell.x86_64-linux =
         let

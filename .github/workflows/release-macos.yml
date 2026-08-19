@@ -17,14 +17,9 @@ jobs:
           - runner: macos-14
             architecture: aarch64
             uname_architecture: arm64
-          - runner: macos-15-intel
-            architecture: x86_64
-            uname_architecture: x86_64
     runs-on: ${{ matrix.runner }}
     env:
       MEETLITE_MANIFEST_SIGNING_KEY: ${{ secrets.MEETLITE_MANIFEST_SIGNING_KEY }}
-      SHELL: /bin/zsh
-      NIX_BUILD_SHELL: /bin/zsh
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
