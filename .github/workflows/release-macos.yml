@@ -31,7 +31,9 @@ jobs:
           export TAG ARCHIVE_SHA256 ARCHIVE_URL
           printf '%s' "$MEETLITE_MANIFEST_SIGNING_KEY" | base64 -D > "$RUNNER_TEMP/manifest-signing-key.pem"
           printf 'version=%s\narchive_url=%s\narchive_sha256=%s\n' "$TAG" "$ARCHIVE_URL" "$ARCHIVE_SHA256" > "$RUNNER_TEMP/manifest.payload"
-          openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/manifest-signing-key.pem" -in "$RUNNER_TEMP/manifest.payload" -out "$RUNNER_TEMP/manifest.signature"
+          # macOS runners use LibreSSL, whose pkeyutl signs Ed25519 input
+          # directly and does not support OpenSSL 3's -rawin flag.
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/manifest-signing-key.pem" -in "$RUNNER_TEMP/manifest.payload" -out "$RUNNER_TEMP/manifest.signature"
           export MANIFEST_SIGNATURE="$(base64 < "$RUNNER_TEMP/manifest.signature" | tr -d '\n')"
           python3 - <<'PY'
           import json
