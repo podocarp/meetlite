@@ -22,7 +22,9 @@ jobs:
       - name: Build ad-hoc signed apps
         run: bash scripts/build-macos-app.sh
       - name: Install manifest signer
-        run: python3 -m pip install --disable-pip-version-check 'cryptography==45.0.6'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/manifest-signer"
+          "$RUNNER_TEMP/manifest-signer/bin/pip" install --disable-pip-version-check 'cryptography==45.0.6'
       - name: Package ad-hoc capture agent and sign manifest
         env:
           TAG: ${{ github.ref_name }}
@@ -31,7 +33,7 @@ jobs:
           ARCHIVE_SHA256="$(shasum -a 256 MeetliteCapture.app.zip | cut -d ' ' -f 1)"
           ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/MeetliteCapture.app.zip"
           export TAG ARCHIVE_SHA256 ARCHIVE_URL
-          python3 - <<'PY'
+          "$RUNNER_TEMP/manifest-signer/bin/python" - <<'PY'
           import base64
           import json
           import os
