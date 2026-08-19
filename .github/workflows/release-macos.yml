@@ -24,6 +24,7 @@ jobs:
     env:
       MEETLITE_MANIFEST_SIGNING_KEY: ${{ secrets.MEETLITE_MANIFEST_SIGNING_KEY }}
       SHELL: /bin/zsh
+      NIX_BUILD_SHELL: /bin/zsh
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
