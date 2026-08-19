@@ -17,7 +17,7 @@ jobs:
           - runner: macos-14
             architecture: aarch64
             uname_architecture: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             architecture: x86_64
             uname_architecture: x86_64
     runs-on: ${{ matrix.runner }}
@@ -45,7 +45,7 @@ jobs:
           CLI_ARCHIVE="meetlite-macos-$ARCHITECTURE.zip"
           AGENT_ARCHIVE="MeetliteCapture-macos-$ARCHITECTURE.app.zip"
           MANIFEST="MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
-          ditto -c -k --sequesterRsrc target/release/meetlite "$CLI_ARCHIVE"
+          ditto -c -k --sequesterRsrc dist/meetlite "$CLI_ARCHIVE"
           ditto -c -k --sequesterRsrc --keepParent dist/MeetliteCapture.app "$AGENT_ARCHIVE"
           ARCHIVE_SHA256="$(shasum -a 256 "$AGENT_ARCHIVE" | cut -d ' ' -f 1)"
           ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/$AGENT_ARCHIVE"
@@ -76,7 +76,7 @@ jobs:
           TAG: ${{ github.ref_name }}
           ARCHITECTURE: ${{ matrix.architecture }}
         run: |
-          for attempt in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             if gh release view "$TAG" >/dev/null 2>&1; then
               break
             fi
@@ -85,6 +85,6 @@ jobs:
           done
           gh release view "$TAG" >/dev/null
           gh release upload "$TAG" --clobber \
-            "meetlite-macos-$ARCHITECTURE.zip" \
-            "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
-            "MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
+           "meetlite-macos-$ARCHITECTURE.zip" \
+           "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
+           "MeetliteCapture-macos-$ARCHITECTURE.manifest.json"

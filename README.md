@@ -43,6 +43,24 @@ separate transcription and summarization APIs downstream for convenience.
 
 You can move `meetlite` anywhere you prefer and run it with `./meetlite`.
 
+## Linux
+
+1. Open the [latest release](https://github.com/podocarp/meetlite/releases/latest).
+2. Download `meetlite-linux-x86_64.tar.gz`.
+3. Extract and run the CLI:
+
+```bash
+tar -xzf meetlite-linux-x86_64.tar.gz
+./meetlite record
+```
+
+Meetlite captures the current default PulseAudio monitor automatically,
+including PipeWire systems with PulseAudio compatibility enabled. If no
+PulseAudio server is available, configure an ALSA fallback in
+`recording.system_device`; `snd-aloop` uses values such as `hw:Loopback,1,0`.
+See [Build from source](docs/building.md) for build prerequisites and headless
+capture tests.
+
 ## Quick Start
 
 List microphones:

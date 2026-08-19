@@ -1,0 +1,47 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install audio build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libasound2-dev libpulse-dev pkg-config
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = x86_64
+      - name: Test and build release binary
+        run: |
+          cargo fmt --check
+          cargo test --locked
+          cargo build --release --locked
+      - name: Package Linux CLI
+        run: |
+          strip target/release/meetlite
+          tar -C target/release -czf meetlite-linux-x86_64.tar.gz meetlite
+      - name: Publish GitHub release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          for _ in 1 2 3 4 5; do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              break
+            fi
+            gh release create "$TAG" --generate-notes >/dev/null 2>&1 || true
+            sleep 2
+          done
+          gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" --clobber meetlite-linux-x86_64.tar.gz
