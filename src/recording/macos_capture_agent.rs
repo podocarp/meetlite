@@ -212,6 +212,11 @@ fn launch_agent(port: u16, token: &[u8; TOKEN_BYTES]) -> Result<()> {
 }
 
 fn capture_agent_path() -> Result<PathBuf> {
+    let installed = crate::setup::installed_agent_path()?;
+    if installed.join("Contents/MacOS/meetlite").is_file() {
+        return Ok(installed);
+    }
+
     let executable = std::env::current_exe().context("could not locate meetlite executable")?;
     let macos = executable
         .parent()
@@ -225,7 +230,8 @@ fn capture_agent_path() -> Result<PathBuf> {
     let agent = app.with_file_name("MeetliteCapture.app");
     if !agent.join("Contents/MacOS/meetlite").is_file() {
         bail!(
-            "MeetliteCapture.app is unavailable at {}; run the packaged Meetlite.app instead of a raw CLI binary",
+            "MeetliteCapture.app is unavailable at {} or {}; run `meetlite setup` or use the packaged Meetlite.app",
+            installed.display(),
             agent.display()
         )
     }

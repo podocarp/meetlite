@@ -58,6 +58,60 @@ open -W dist/Meetlite.app --args record --duration 60
 The app writes recording and transcript artifacts to `--output`; LaunchServices
 does not relay this CLI app's stdout to the invoking terminal.
 
+## Capture Agent Setup
+
+Release CLI builds can install or update the manifest-verified system-audio
+companion:
+
+```bash
+meetlite setup
+```
+
+On macOS, setup downloads `MeetliteCapture.manifest.json` from the latest
+GitHub release, verifies its Ed25519 signature against a public key compiled
+into Meetlite, verifies the ZIP SHA-256, safely extracts only
+`MeetliteCapture.app`, and verifies its macOS code signature before atomically
+installing it at:
+
+```text
+~/Library/Application Support/Meetlite/MeetliteCapture.app
+```
+
+The prior installed bundle is retained as `MeetliteCapture.app.previous` until
+the next successful update. The recorder prefers this stable installed path and
+falls back to the sibling development bundle. Setup does not execute an app from
+its staging directory. On non-macOS platforms, it succeeds without changes and
+reports that no companion is needed.
+
+The manifest has exactly `version`, `archive_url`, `archive_sha256`, and
+`signature` fields. The signature signs this UTF-8 payload exactly (including
+the trailing newline):
+
+```text
+version=<version>
+archive_url=<archive_url>
+archive_sha256=<lowercase hex sha256>
+```
+
+After installation, grant **Meetlite Capture** under **System Settings >
+Privacy & Security > Audio Capture** when macOS prompts. macOS does not expose
+a supported command-line API for querying that TCC grant, so setup reports the
+required grant rather than asserting its current state.
+
+## Release Signing
+
+`.github/workflows/release-macos.yml` runs only for `v*` tags. It produces an
+ad-hoc-signed, non-notarized macOS release. The release manifest is signed, but
+macOS may show Gatekeeper warnings and may not retain Audio Capture permission
+reliably across updates.
+
+- `MEETLITE_MANIFEST_SIGNING_KEY`: base64-encoded PEM Ed25519 private key whose
+  public key is pinned in `src/setup.rs`.
+
+The workflow creates the ZIP, signs the canonical manifest, and publishes both
+assets to the tagged GitHub release. Add Developer ID signing and notarization
+later when Apple Developer Program credentials are available.
+
 For development, the equivalent build-and-run command is:
 
 ```bash

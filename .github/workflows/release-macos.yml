@@ -1,0 +1,54 @@
+name: Release macOS capture agent
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-capture-agent:
+    runs-on: macos-14
+    env:
+      MEETLITE_MANIFEST_SIGNING_KEY: ${{ secrets.MEETLITE_MANIFEST_SIGNING_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require manifest signing secret
+        run: |
+          test -n "$MEETLITE_MANIFEST_SIGNING_KEY"
+      - name: Build ad-hoc signed apps
+        run: bash scripts/build-macos-app.sh
+      - name: Package ad-hoc capture agent and sign manifest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/MeetliteCapture.app MeetliteCapture.app.zip
+          ARCHIVE_SHA256="$(shasum -a 256 MeetliteCapture.app.zip | cut -d ' ' -f 1)"
+          ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/MeetliteCapture.app.zip"
+          export TAG ARCHIVE_SHA256 ARCHIVE_URL
+          printf '%s' "$MEETLITE_MANIFEST_SIGNING_KEY" | base64 -D > "$RUNNER_TEMP/manifest-signing-key.pem"
+          printf 'version=%s\narchive_url=%s\narchive_sha256=%s\n' "$TAG" "$ARCHIVE_URL" "$ARCHIVE_SHA256" > "$RUNNER_TEMP/manifest.payload"
+          openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/manifest-signing-key.pem" -in "$RUNNER_TEMP/manifest.payload" -out "$RUNNER_TEMP/manifest.signature"
+          export MANIFEST_SIGNATURE="$(base64 < "$RUNNER_TEMP/manifest.signature" | tr -d '\n')"
+          python3 - <<'PY'
+          import json
+          import os
+
+          manifest = {
+              "version": os.environ["TAG"],
+              "archive_url": os.environ["ARCHIVE_URL"],
+              "archive_sha256": os.environ["ARCHIVE_SHA256"],
+              "signature": os.environ["MANIFEST_SIGNATURE"],
+          }
+          with open("MeetliteCapture.manifest.json", "w", encoding="ascii") as output:
+              json.dump(manifest, output, separators=(",", ":"), sort_keys=True)
+              output.write("\n")
+          PY
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --generate-notes MeetliteCapture.app.zip MeetliteCapture.manifest.json

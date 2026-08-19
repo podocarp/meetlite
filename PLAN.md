@@ -381,7 +381,7 @@ headers directly or use a small pure-Rust WAV crate; do not add FFmpeg.
   future setup command owns downloading, verification, and updates for that
   path.
 
-#### 5b. Platform Agent Setup
+#### 5b. Platform Agent Setup (Complete)
 
 - Add `meetlite setup` to install or update the platform-specific capture agent
   into a stable, versioned Meetlite cache directory.

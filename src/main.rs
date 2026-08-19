@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod recording;
+mod setup;
 mod transcription;
 
 use anyhow::{Context, Result};
@@ -36,6 +37,7 @@ fn main() -> Result<()> {
             println!("{}", Config::path(cli.config.as_deref())?.display());
         }
         Command::Devices => list_devices()?,
+        Command::Setup => setup::run()?,
         Command::Record(args) => {
             let config = Config::load_if_present(cli.config.as_deref())?;
             recording::record(args, config.as_ref().map(|config| &config.recording))?;
