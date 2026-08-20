@@ -25,8 +25,10 @@ pub struct Cli {
 pub enum Command {
     /// Record microphone and system audio into a local WAV file.
     Record(RecordArgs),
-    /// Transcribe a file, or record and transcribe when no file is supplied.
+    /// Transcribe an existing audio recording.
     Transcribe(TranscribeArgs),
+    /// Generate a Markdown summary from a transcript.
+    Summarize(SummarizeArgs),
     /// List available microphone devices.
     Devices,
     /// Initialize or inspect configuration.
@@ -52,7 +54,7 @@ pub struct CaptureAgentArgs {
     pub token: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct RecordArgs {
     /// Directory where the recording will be written.
     #[arg(short, long)]
@@ -77,28 +79,30 @@ pub struct RecordArgs {
     /// Override the configured system-audio gain.
     #[arg(long)]
     pub system_gain: Option<f32>,
+
+    /// Transcribe the recording while it is captured.
+    #[arg(long)]
+    pub transcribe: bool,
+
+    /// Transcribe the recording and write a summary when it finishes.
+    #[arg(long)]
+    pub summarize: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct TranscribeArgs {
-    /// Existing audio file to transcribe. Omit to record and transcribe live.
-    pub input: Option<PathBuf>,
+    /// Existing audio file to transcribe.
+    pub input: PathBuf,
 
-    /// Directory where recording and transcript artifacts will be written.
+    /// Directory where transcript artifacts will be written.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+}
 
-    /// Stop live recording automatically after this many seconds.
-    #[arg(long)]
-    pub duration: Option<u64>,
-
-    /// Do not capture the default microphone in live mode.
-    #[arg(long)]
-    pub no_microphone: bool,
-
-    /// Do not capture global system audio in live mode.
-    #[arg(long)]
-    pub no_system_audio: bool,
+#[derive(Debug, Args)]
+pub struct SummarizeArgs {
+    /// Transcript JSON to summarize. Defaults to transcript.json in the current directory.
+    pub input: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -107,4 +111,25 @@ pub enum ConfigCommand {
     Init,
     /// Print the effective configuration path.
     Path,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn record_pipeline_flags_are_explicit() {
+        let cli = Cli::try_parse_from(["meetlite", "record", "--summarize"]).unwrap();
+        let Command::Record(args) = cli.command else {
+            panic!("expected record command")
+        };
+        assert!(args.summarize);
+        assert!(!args.transcribe);
+    }
+
+    #[test]
+    fn transcribe_requires_an_existing_input() {
+        assert!(Cli::try_parse_from(["meetlite", "transcribe"]).is_err());
+    }
 }

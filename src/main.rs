@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod recording;
 mod setup;
+mod summary;
 mod transcription;
 
 use anyhow::{Context, Result};
@@ -39,25 +40,49 @@ fn main() -> Result<()> {
         Command::Devices => list_devices()?,
         Command::Setup => setup::run()?,
         Command::Record(args) => {
-            let config = Config::load_if_present(cli.config.as_deref())?;
-            recording::record(args, config.as_ref().map(|config| &config.recording))?;
+            if args.transcribe || args.summarize {
+                let config = Config::load(cli.config.as_deref())?;
+                let transcript = transcription::transcribe_live(
+                    args.clone(),
+                    Some(&config.recording),
+                    config.stt()?.clone(),
+                )?;
+                if args.summarize {
+                    let transcript_path = std::path::Path::new(&transcript.source_path)
+                        .parent()
+                        .context("live recording audio path must include a parent directory")?
+                        .join("transcript.json");
+                    let output = summary::summarize(Some(&transcript_path), config.llm.as_ref())?;
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&output)?);
+                    } else {
+                        println!("{}", output.summary_path.display());
+                    }
+                } else if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&transcript)?);
+                }
+            } else {
+                let config = Config::load_if_present(cli.config.as_deref())?;
+                recording::record(args, config.as_ref().map(|config| &config.recording))?;
+            }
         }
         Command::Transcribe(args) => {
             let config = Config::load(cli.config.as_deref())?;
-            let transcript = match args.input.as_deref() {
-                Some(input) => {
-                    transcription::transcribe_file(input, args.output.as_deref(), config.stt()?)?
-                }
-                None => transcription::transcribe_live(
-                    args,
-                    Some(&config.recording),
-                    config.stt()?.clone(),
-                )?,
-            };
+            let transcript =
+                transcription::transcribe_file(&args.input, args.output.as_deref(), config.stt()?)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&transcript)?);
             } else {
                 println!("{}", transcript.text);
+            }
+        }
+        Command::Summarize(args) => {
+            let config = Config::load(cli.config.as_deref())?;
+            let output = summary::summarize(args.input.as_deref(), config.llm.as_ref())?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!("{}", output.summary_path.display());
             }
         }
     }

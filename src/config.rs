@@ -61,8 +61,12 @@ pub struct SttConfig {
 #[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     pub base_url: String,
+    #[serde(default = "default_chat_completions_path")]
+    pub chat_completions_path: String,
     pub model: String,
     pub auth: AuthConfig,
+    /// Extra instructions, such as names and terminology to correct.
+    pub instructions: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -167,6 +171,9 @@ impl Config {
         }
         if let Some(llm) = &self.llm {
             validate_provider("llm", &llm.base_url, &llm.model, &llm.auth)?;
+            if !llm.chat_completions_path.starts_with('/') {
+                bail!("llm.chat_completions_path must start with /")
+            }
         }
 
         Ok(())
@@ -191,6 +198,10 @@ fn default_response_format() -> String {
 
 fn default_transcription_path() -> String {
     "/audio/transcriptions".into()
+}
+
+fn default_chat_completions_path() -> String {
+    "/chat/completions".into()
 }
 
 fn validate_gain(name: &str, gain: f32) -> Result<()> {

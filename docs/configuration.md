@@ -30,6 +30,16 @@ Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
       "type": "bearer",
       "token_env": "MEETLITE_STT_API_KEY"
     }
+  },
+  "llm": {
+    "base_url": "https://llm.example.com/v1",
+    "chat_completions_path": "/chat/completions",
+    "model": "gpt-4o-mini",
+    "auth": {
+      "type": "bearer",
+      "token_env": "MEETLITE_LLM_API_KEY"
+    },
+    "instructions": "Correct Acme to Acme Corp and use the spelling Nia Chen."
   }
 }
 ```
@@ -46,6 +56,11 @@ example `hw:Loopback,1,0` when audio is sent to `hw:Loopback,0,0`.
 
 `stt` is required only for transcription. `base_url` must start with `http://`
 or `https://`; `transcription_path` defaults to `/audio/transcriptions`.
+
+`llm` is required only for `meetlite summarize`. It uses an OpenAI-compatible
+chat-completions endpoint; `chat_completions_path` defaults to
+`/chat/completions`. `instructions` is optional text sent with every summary
+request for corrections such as names and domain terminology.
 
 ## Authentication
 

@@ -114,14 +114,33 @@ export MEETLITE_STT_API_KEY='...'
 ./meetlite transcribe ./team-sync/audio.wav
 ```
 
-Or record and transcribe live:
+Record and transcribe live:
 
 ```bash
-./meetlite transcribe --duration 60 --output ./live-sync
+./meetlite record --transcribe --duration 60 --output ./live-sync
 ```
 
 Live transcription preserves `audio.wav`, writes progress to `transcript.jsonl`,
 and writes the completed result to `transcript.json`.
+
+## Summaries
+
+Configure an OpenAI-compatible chat-completions endpoint in the `llm` section,
+then summarize a transcript. Meetlite writes `summary.md` beside the transcript;
+summaries are optional and never affect recording or transcription artifacts.
+
+```bash
+./meetlite summarize ./team-sync/transcript.json
+```
+
+Use `llm.instructions` for names, terminology, and other transcription
+corrections before the model creates the Markdown summary.
+
+To run the full recording pipeline, including the final summary:
+
+```bash
+./meetlite record --summarize --duration 60 --output ./team-sync
+```
 
 ## More references/docs
 

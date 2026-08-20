@@ -13,7 +13,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{RecordArgs, TranscribeArgs},
+    cli::RecordArgs,
     config::{RecordingConfig, SttConfig},
     recording::{self, RecordingOutput},
 };
@@ -57,7 +57,7 @@ pub fn transcribe_file(
 }
 
 pub fn transcribe_live(
-    args: TranscribeArgs,
+    args: RecordArgs,
     recording_config: Option<&RecordingConfig>,
     stt: SttConfig,
 ) -> Result<Transcript> {
@@ -66,14 +66,7 @@ pub fn transcribe_live(
     let worker = thread::spawn(move || live_worker(receiver, started_receiver, stt));
     let mut chunker = Chunker::new(sender);
     let recording_result = recording::record_with_samples(
-        RecordArgs {
-            output: args.output,
-            duration: args.duration,
-            no_microphone: args.no_microphone,
-            no_system_audio: args.no_system_audio,
-            microphone_gain: None,
-            system_gain: None,
-        },
+        args,
         recording_config,
         |output| {
             let _ = started_sender.send(output.clone());
