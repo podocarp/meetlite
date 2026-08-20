@@ -52,7 +52,8 @@ fn main() -> Result<()> {
                         .parent()
                         .context("live recording audio path must include a parent directory")?
                         .join("transcript.json");
-                    let output = summary::summarize(Some(&transcript_path), config.llm.as_ref())?;
+                    let output =
+                        summary::summarize(&transcript_path, config.llm.as_ref(), args.force)?;
                     if cli.json {
                         println!("{}", serde_json::to_string_pretty(&output)?);
                     } else {
@@ -68,8 +69,12 @@ fn main() -> Result<()> {
         }
         Command::Transcribe(args) => {
             let config = Config::load(cli.config.as_deref())?;
-            let transcript =
-                transcription::transcribe_file(&args.input, args.output.as_deref(), config.stt()?)?;
+            let transcript = transcription::transcribe_file(
+                &args.input,
+                args.output.as_deref(),
+                config.stt()?,
+                args.force,
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&transcript)?);
             } else {
@@ -78,7 +83,7 @@ fn main() -> Result<()> {
         }
         Command::Summarize(args) => {
             let config = Config::load(cli.config.as_deref())?;
-            let output = summary::summarize(args.input.as_deref(), config.llm.as_ref())?;
+            let output = summary::summarize(&args.input, config.llm.as_ref(), args.force)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {

@@ -291,7 +291,7 @@ fn record_platform(
         bail!("at least one audio source must be enabled")
     }
 
-    let output_dir = output_dir(args.output.as_deref())?;
+    let output_dir = output_dir(args.output.as_deref(), args.force)?;
     let output_file = output_dir.join("audio.wav");
     on_started(&RecordingOutput {
         output_dir: output_dir.clone(),
@@ -480,13 +480,41 @@ fn unix_time_ms() -> u128 {
         .as_millis()
 }
 
-fn output_dir(configured: Option<&Path>) -> Result<PathBuf> {
+fn output_dir(configured: Option<&Path>, force: bool) -> Result<PathBuf> {
     let path = match configured {
         Some(path) => path.to_path_buf(),
         None => PathBuf::from(format!("meetlite-{}", unix_time_ms())),
     };
-    fs::create_dir(&path)
-        .with_context(|| format!("could not create output directory {}", path.display()))?;
+    if path.exists() {
+        if !force {
+            bail!(
+                "refusing to use existing output directory {}; pass --force to replace Meetlite artifacts",
+                path.display()
+            )
+        }
+        for name in [
+            "audio.wav",
+            "metadata.json",
+            "metadata.json.tmp",
+            "transcript.json",
+            "transcript.jsonl",
+            "summary.md",
+        ] {
+            let artifact = path.join(name);
+            if artifact.exists() {
+                fs::remove_file(&artifact)
+                    .with_context(|| format!("could not remove {}", artifact.display()))?;
+            }
+        }
+        let chunks = path.join("chunks");
+        if chunks.exists() {
+            fs::remove_dir_all(&chunks)
+                .with_context(|| format!("could not remove {}", chunks.display()))?;
+        }
+    } else {
+        fs::create_dir(&path)
+            .with_context(|| format!("could not create output directory {}", path.display()))?;
+    }
     Ok(path)
 }
 
@@ -539,6 +567,25 @@ mod tests {
         assert_eq!(
             samples[WINDOW_SAMPLES],
             (0.5 * i16::MAX as f32).round() as i16
+        );
+    }
+
+    #[test]
+    fn forced_output_directory_removes_only_meetlite_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("audio.wav"), "old audio").unwrap();
+        fs::write(directory.path().join("notes.txt"), "keep me").unwrap();
+        fs::create_dir(directory.path().join("chunks")).unwrap();
+        fs::write(directory.path().join("chunks/old.wav"), "old chunk").unwrap();
+
+        assert!(output_dir(Some(directory.path()), false).is_err());
+        output_dir(Some(directory.path()), true).unwrap();
+
+        assert!(!directory.path().join("audio.wav").exists());
+        assert!(!directory.path().join("chunks").exists());
+        assert_eq!(
+            fs::read_to_string(directory.path().join("notes.txt")).unwrap(),
+            "keep me"
         );
     }
 

@@ -80,6 +80,10 @@ pub struct RecordArgs {
     #[arg(long)]
     pub system_gain: Option<f32>,
 
+    /// Replace existing Meetlite artifacts in the output directory.
+    #[arg(long)]
+    pub force: bool,
+
     /// Transcribe the recording while it is captured.
     #[arg(long)]
     pub transcribe: bool,
@@ -97,12 +101,20 @@ pub struct TranscribeArgs {
     /// Directory where transcript artifacts will be written.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// Replace an existing transcript.json in the output directory.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct SummarizeArgs {
-    /// Transcript JSON to summarize. Defaults to transcript.json in the current directory.
-    pub input: Option<PathBuf>,
+    /// Existing transcript JSON to summarize.
+    pub input: PathBuf,
+
+    /// Replace an existing summary.md beside the transcript.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -131,5 +143,10 @@ mod tests {
     #[test]
     fn transcribe_requires_an_existing_input() {
         assert!(Cli::try_parse_from(["meetlite", "transcribe"]).is_err());
+    }
+
+    #[test]
+    fn summarize_requires_an_existing_input() {
+        assert!(Cli::try_parse_from(["meetlite", "summarize"]).is_err());
     }
 }

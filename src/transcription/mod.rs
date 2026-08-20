@@ -8,7 +8,7 @@ use std::{
     thread,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 
@@ -45,14 +45,22 @@ pub fn transcribe_file(
     input: &Path,
     output: Option<&Path>,
     config: &SttConfig,
+    force: bool,
 ) -> Result<Transcript> {
-    let transcript = openai_compatible::transcribe(input, config)?;
     let directory = output
         .map(Path::to_path_buf)
         .or_else(|| input.parent().map(Path::to_path_buf))
         .context("input audio path must include a parent directory")?;
     fs::create_dir_all(&directory)?;
-    write_json(&directory.join(TRANSCRIPT_FILE), &transcript)?;
+    let transcript_path = directory.join(TRANSCRIPT_FILE);
+    if transcript_path.exists() && !force {
+        bail!(
+            "refusing to overwrite {}; pass --force to replace it",
+            transcript_path.display()
+        )
+    }
+    let transcript = openai_compatible::transcribe(input, config)?;
+    write_json(&transcript_path, &transcript)?;
     Ok(transcript)
 }
 
@@ -331,6 +339,7 @@ fn finalize_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AuthConfig, SttConfig};
 
     #[test]
     fn offset_segments_clamps_provider_timestamps_to_the_chunk() {
@@ -344,5 +353,32 @@ mod tests {
 
         assert_eq!(segments[0].start_seconds, 15.0);
         assert_eq!(segments[0].end_seconds, 21.0);
+    }
+
+    #[test]
+    fn refuses_to_overwrite_transcript_without_force() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join(TRANSCRIPT_FILE),
+            "existing transcript",
+        )
+        .unwrap();
+        let config = SttConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            transcription_path: "/audio/transcriptions".into(),
+            model: "test".into(),
+            language: None,
+            response_format: "verbose_json".into(),
+            auth: AuthConfig::None,
+        };
+
+        let error = transcribe_file(
+            &directory.path().join("audio.wav"),
+            Some(directory.path()),
+            &config,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("pass --force"));
     }
 }

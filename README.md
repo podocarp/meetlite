@@ -63,19 +63,19 @@ capture tests.
 
 ## Quick Start
 
-List microphones:
+Core commands:
 ```bash
-./meetlite devices
+meetlite devices # list microphones
+meetlite record  # records only.
+meetlite record --transcribe # records with live transcription.
+meetlite record --summarize  # records, live-transcribes, then writes summary.md.
+meetlite transcribe <AUDIO_FILE> # transcribe an existing recording
+meetlite summarize <TRANSCRIPT>  # summarize an existing transcript
 ```
-
-Record until you press Ctrl-C:
+Of course you can pass `--help` to any of them to get a list of flags and
+commands. For instance record for one minute into a chosen directory:
 ```bash
-./meetlite record
-```
-
-Record for one minute into a chosen directory:
-```bash
-./meetlite record --duration 60 --output ./team-sync
+meetlite record --duration 60 --output ./team-sync
 ```
 
 Meetlite writes `audio.wav` and `metadata.json` to the output directory. Without
@@ -123,15 +123,22 @@ Record and transcribe live:
 Live transcription preserves `audio.wav`, writes progress to `transcript.jsonl`,
 and writes the completed result to `transcript.json`.
 
+Meetlite refuses to replace an existing output directory or generated transcript
+by default. Use `--force` to replace Meetlite artifacts in a specified recording
+directory or an existing `transcript.json`.
+
 ## Summaries
 
 Configure an OpenAI-compatible chat-completions endpoint in the `llm` section,
-then summarize a transcript. Meetlite writes `summary.md` beside the transcript;
-summaries are optional and never affect recording or transcription artifacts.
+then summarize one existing transcript. Meetlite writes `summary.md` beside the
+transcript; summaries are optional and never affect recording or transcription
+artifacts.
 
 ```bash
 ./meetlite summarize ./team-sync/transcript.json
 ```
+
+Meetlite refuses to replace an existing `summary.md`; use `--force` to rewrite it.
 
 Use `llm.instructions` for names, terminology, and other transcription
 corrections before the model creates the Markdown summary.

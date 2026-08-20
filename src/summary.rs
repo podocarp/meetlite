@@ -17,7 +17,6 @@ use crate::{
     transcription::Transcript,
 };
 
-const TRANSCRIPT_FILE: &str = "transcript.json";
 const SUMMARY_FILE: &str = "summary.md";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const SUMMARY_TEMPLATE: &str = "## Summary\n\n## Decisions\n\n## Action Items\n\n## Open Questions";
@@ -28,11 +27,10 @@ pub struct SummaryOutput {
     pub model: String,
 }
 
-pub fn summarize(input: Option<&Path>, config: Option<&LlmConfig>) -> Result<SummaryOutput> {
+pub fn summarize(input: &Path, config: Option<&LlmConfig>, force: bool) -> Result<SummaryOutput> {
     let config = config.context(
         "no LLM provider is configured; add an `llm` section to the Meetlite configuration",
     )?;
-    let input = input.unwrap_or_else(|| Path::new(TRANSCRIPT_FILE));
     let transcript: Transcript = serde_json::from_slice(
         &fs::read(input)
             .with_context(|| format!("could not read transcript {}", input.display()))?,
@@ -42,14 +40,20 @@ pub fn summarize(input: Option<&Path>, config: Option<&LlmConfig>) -> Result<Sum
         bail!("transcript {} has no text to summarize", input.display())
     }
 
-    let summary = request_summary(&transcript.text, config)?;
-    if summary.trim().is_empty() {
-        bail!("LLM response did not include a summary")
-    }
     let summary_path = input
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(SUMMARY_FILE);
+    if summary_path.exists() && !force {
+        bail!(
+            "refusing to overwrite {}; pass --force to replace it",
+            summary_path.display()
+        )
+    }
+    let summary = request_summary(&transcript.text, config)?;
+    if summary.trim().is_empty() {
+        bail!("LLM response did not include a summary")
+    }
     fs::write(&summary_path, format!("{}\n", summary.trim_end()))
         .with_context(|| format!("could not write {}", summary_path.display()))?;
     Ok(SummaryOutput {
@@ -170,7 +174,7 @@ mod tests {
         });
 
         let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join(TRANSCRIPT_FILE);
+        let transcript_path = directory.path().join("transcript.json");
         fs::write(
             &transcript_path,
             serde_json::to_vec(&Transcript {
@@ -195,12 +199,34 @@ mod tests {
             instructions: Some("Correct Acme to Acme Corp".into()),
         };
 
-        let output = summarize(Some(&transcript_path), Some(&config)).unwrap();
+        let output = summarize(&transcript_path, Some(&config), false).unwrap();
         server.join().unwrap();
         assert_eq!(output.summary_path, directory.path().join(SUMMARY_FILE));
         assert_eq!(
             fs::read_to_string(output.summary_path).unwrap(),
             "## Summary\nAcme Corp met.\n"
+        );
+    }
+
+    #[test]
+    fn refuses_to_overwrite_summary_without_force() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.json");
+        fs::write(&transcript_path, r#"{"schema_version":1,"text":"Meeting text","language":null,"duration_seconds":null,"segments":[],"provider":"test","model":"test","source_path":"test.wav","raw_response":null}"#).unwrap();
+        fs::write(directory.path().join(SUMMARY_FILE), "existing summary").unwrap();
+        let config = LlmConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            chat_completions_path: "/chat/completions".into(),
+            model: "test".into(),
+            auth: AuthConfig::None,
+            instructions: None,
+        };
+
+        let error = summarize(&transcript_path, Some(&config), false).unwrap_err();
+        assert!(error.to_string().contains("pass --force"));
+        assert_eq!(
+            fs::read_to_string(directory.path().join(SUMMARY_FILE)).unwrap(),
+            "existing summary"
         );
     }
 }

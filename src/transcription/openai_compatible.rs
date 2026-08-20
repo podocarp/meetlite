@@ -220,6 +220,7 @@ mod tests {
             &input,
             Some(temporary.path()),
             &config(format!("http://{address}/v1")),
+            false,
         )
         .unwrap();
         env::remove_var("MEETLITE_TEST_TOKEN");
