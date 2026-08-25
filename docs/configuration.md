@@ -1,15 +1,26 @@
 # Configuration
 
 Meetlite reads JSON configuration from `~/.config/meetlite/config.json` by
-default. Create it with:
+default.
+
+Create the file:
 
 ```bash
 meetlite config init
 ```
 
+Print the active path:
+
+```bash
+meetlite config path
+```
+
 Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
 
-## Schema
+## Minimal config
+
+Recording works without transcription or summary settings. The default config is
+enough for tested macOS and Debian 11 recording setups:
 
 ```json
 {
@@ -20,17 +31,64 @@ Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
     "microphone_device": null,
     "system_device": null
   },
+  "stt": null,
+  "llm": null
+}
+```
+
+`sample_rate` must be `48000`. Device names come from `meetlite devices`.
+
+## Recording settings
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `sample_rate` | `48000` | Output WAV sample rate. |
+| `microphone_gain` | `1.0` | Microphone gain before mixing. |
+| `system_gain` | `0.8` | System-audio gain before mixing. |
+| `microphone_device` | `null` | Use the default microphone unless set. |
+| `system_device` | `null` | Linux ALSA fallback device when PulseAudio is unavailable. |
+
+On macOS, system audio is captured from the default output through
+`MeetliteCapture.app`; `recording.system_device` is not used.
+
+On Debian 11 and other Linux desktops, Meetlite first records the current default
+PulseAudio sink monitor. PipeWire works when its PulseAudio compatibility server
+is running. If no PulseAudio monitor is available, set `recording.system_device`
+to an ALSA PCM capture device. For `snd-aloop`, use the capture side paired with
+your playback device, for example `hw:Loopback,1,0` when audio is sent to
+`hw:Loopback,0,0`.
+
+## Transcription settings
+
+`stt` is required only for `meetlite transcribe` or `meetlite record --transcribe`.
+It must point to an OpenAI-compatible multipart transcription endpoint.
+
+```json
+{
   "stt": {
     "base_url": "https://stt.example.com/v1",
     "transcription_path": "/audio/transcriptions",
     "model": "whisper-large-v3",
-    "language": null,
+    "language": "en",
     "response_format": "verbose_json",
     "auth": {
       "type": "bearer",
       "token_env": "MEETLITE_STT_API_KEY"
     }
-  },
+  }
+}
+```
+
+`base_url` must start with `http://` or `https://`. `transcription_path` defaults
+to `/audio/transcriptions`, and `response_format` defaults to `verbose_json`.
+
+## Summary settings
+
+`llm` is required only for `meetlite summarize` or `meetlite record --summarize`.
+It uses an OpenAI-compatible chat-completions endpoint.
+
+```json
+{
   "llm": {
     "base_url": "https://llm.example.com/v1",
     "chat_completions_path": "/chat/completions",
@@ -44,28 +102,14 @@ Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
 }
 ```
 
-`recording` is optional. The recorder currently requires `sample_rate` to be
-`48000`. Device names come from `meetlite devices`.
-
-On Linux, Meetlite first records the current default PulseAudio sink monitor,
-with no extra configuration. This also works with PipeWire when its
-PulseAudio-compatibility server is running. If no PulseAudio monitor is
-available, configure `recording.system_device` as an ALSA PCM fallback. For an
-ALSA loopback card, use the capture side paired with your playback device, for
-example `hw:Loopback,1,0` when audio is sent to `hw:Loopback,0,0`.
-
-`stt` is required only for transcription. `base_url` must start with `http://`
-or `https://`; `transcription_path` defaults to `/audio/transcriptions`.
-
-`llm` is required only for `meetlite summarize`. It uses an OpenAI-compatible
-chat-completions endpoint; `chat_completions_path` defaults to
-`/chat/completions`. `instructions` is optional text sent with every summary
-request for corrections such as names and domain terminology.
+`chat_completions_path` defaults to `/chat/completions`. `instructions` is
+optional text sent with every summary request for names, terminology, and other
+corrections.
 
 ## Authentication
 
-Do not place API keys directly in the configuration file. Reference an
-environment variable instead.
+Do not place API keys directly in the configuration file. Reference environment
+variables instead.
 
 Bearer token:
 

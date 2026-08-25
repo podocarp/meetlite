@@ -3,8 +3,9 @@
 ## Project
 
 Meetlite is a Rust CLI for local 48 kHz mono PCM WAV recording and optional
-OpenAI-compatible transcription. macOS is the supported platform. Read
-`PLAN.md` before changing capture, persistence, or transcription behavior.
+OpenAI-compatible transcription. Recording has been tested on macOS and Debian
+11 Linux. Read `PLAN.md` before changing capture, persistence, or transcription
+behavior.
 
 ## Architecture
 
@@ -35,12 +36,11 @@ notarized and do not have stable Developer ID TCC behavior across updates.
 ## Release Process
 
 `.github/workflows/release-macos.yml` runs on pushed `v*` tags. Its native
-macOS matrix builds `aarch64` on `macos-14` and `x86_64` on `macos-13`. Each
-build publishes `meetlite-macos-<architecture>.zip`,
-`MeetliteCapture-macos-<architecture>.app.zip`, and
-`MeetliteCapture-macos-<architecture>.manifest.json`. The workflow creates or
-views the release before uploading with `--clobber`, so matrix jobs do not race
-to create it.
+macOS build publishes `meetlite-macos-aarch64.zip`,
+`MeetliteCapture-macos-aarch64.app.zip`, and
+`MeetliteCapture-macos-aarch64.manifest.json`. `.github/workflows/release-linux.yml`
+publishes `meetlite-linux-x86_64.tar.gz`. The workflows create or view the
+release before uploading with `--clobber`, so jobs do not race to create it.
 
 - Required GitHub secret: `MEETLITE_MANIFEST_SIGNING_KEY`, a base64-encoded PEM
   Ed25519 private key.

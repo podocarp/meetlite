@@ -1,97 +1,103 @@
+<p align="center">
+  <img src="assets/meetlite-banner.svg" alt="Meetlite banner" width="100%">
+</p>
+
 # Meetlite
 
+Meetlite is a small Rust CLI for recording meetings to local WAV files, with
+optional OpenAI-compatible transcription and summarization.
+
+It is built for people who want the Unix-style version of a meeting recorder:
+record clean audio, keep the files locally, and choose your own transcription or
+LLM provider.
+
 > [!NOTE]
-> Meetlite is still heavily WIP and not ready for release yet.
+> Meetlite is early software. Release artifacts are experimental; back up
+> recordings and verify capture on your hardware before relying on it.
 
-Meetlite is a simple CLI meeting recorder and optional transcriber and
-summarizer. It's born out of my frustration at the lack of a simple,
-low-resource consumption tool that runs on all devices. It is heavily inspired
-by [meetily](https://github.com/Zackriya-Solutions/meetily) but I wanted to
-solve two problems with such offerings:
-- Bloat: I didnt' want another JS stack running a GUI eating into the precious
-VRAM for me to run larger whisper and LLM models. I am already heavily swapping
-on a macbook air with all the electron crap and browsers, I have no resources to
-run another GUI and whisper and llama at the back.
-- External models: meetily, due to wanting to handle transcription and
-summarization locally (it does make the happy path faster for regular users),
-had difficulty hooking into external APIs. There has been talk of providing a
-meetily API. I'm sure it can be done at some point in time, but I didnt' really
-like that. `Meetlite` does not force you into anything so you can choose to use
-large hosted models, or self-hosted models, or run directly on-device, or even
-just save the wav files and do whatever (fine tuning etc.).
+## Supported platforms
 
-In summary: unix philosophy. I just want a tool that does recording, mixing,
-filtering really well (it is harder than you think!), and optionally hooks into
-separate transcription and summarization APIs downstream for convenience.
+Recording has been tested on:
+
+- macOS 14.4+ on Apple Silicon, using the `MeetliteCapture.app` companion for
+  system audio permissions.
+- Debian 11 x86_64, using the default PulseAudio monitor for system audio.
+
+Linux also works on PipeWire desktops when PulseAudio compatibility is enabled.
+If PulseAudio is not available, configure an ALSA capture device such as
+`snd-aloop`.
+
+Windows system-audio capture is not supported yet.
 
 ## Install
 
+### macOS
+
 1. Open the [latest release](https://github.com/podocarp/meetlite/releases/latest).
-2. Download `meetlite-macos-aarch64.zip` for Apple Silicon or
-   `meetlite-macos-x86_64.zip` for an Intel Mac.
-3. Unzip it and run `meetlite setup` from the folder containing `meetlite`.
+2. Download `meetlite-macos-aarch64.zip`.
+3. Unzip it and run setup once:
+
 ```bash
 ./meetlite setup
 ```
-> [!NOTE]
-> On MacOS this downloads an additional app from github releases (you can also do this
-> manually, but why) to `~/Library/Application Support/Meetlite/MeetliteCapture.app`.
-> This core recording app handles signing and TCC on MacOS so that the CLI is
-> more ergonomic and you don't need to wrangle with `open` and flags. All this
-> is handled transparently for you, so just treat this as a heads up. Other than
-> this everything works the same across all platforms.
 
-You can move `meetlite` anywhere you prefer and run it with `./meetlite`.
+`meetlite setup` installs `MeetliteCapture.app` to
+`~/Library/Application Support/Meetlite/MeetliteCapture.app`. macOS grants Audio
+Capture permission to that companion app, not to the terminal binary.
 
-## Linux
+Then start a recording:
+
+```bash
+./meetlite record
+```
+
+### Debian 11 / Linux x86_64
 
 1. Open the [latest release](https://github.com/podocarp/meetlite/releases/latest).
 2. Download `meetlite-linux-x86_64.tar.gz`.
-3. Extract and run the CLI:
+3. Install runtime audio libraries and extract the CLI:
 
 ```bash
+sudo apt install libasound2 libpulse0 ca-certificates
 tar -xzf meetlite-linux-x86_64.tar.gz
 ./meetlite record
 ```
 
-Meetlite captures the current default PulseAudio monitor automatically,
-including PipeWire systems with PulseAudio compatibility enabled. If no
-PulseAudio server is available, configure an ALSA fallback in
-`recording.system_device`; `snd-aloop` uses values such as `hw:Loopback,1,0`.
-See [Build from source](docs/building.md) for build prerequisites and headless
-capture tests.
+On normal Debian desktop sessions, Meetlite captures your microphone and the
+current default PulseAudio monitor automatically.
 
-## Quick Start
+## Quick start
 
-Core commands:
 ```bash
-meetlite devices # list microphones
-meetlite record  # records only.
-meetlite record --transcribe # records with live transcription.
-meetlite record --summarize  # records, live-transcribes, then writes summary.md.
-meetlite transcribe <AUDIO_FILE> # transcribe an existing recording
-meetlite summarize <TRANSCRIPT>  # summarize an existing transcript
-```
-Of course you can pass `--help` to any of them to get a list of flags and
-commands. For instance record for one minute into a chosen directory:
-```bash
-meetlite record --duration 60 --output ./team-sync
+meetlite devices                         # list microphones
+meetlite record                          # record mic + system audio
+meetlite record --duration 60            # stop after 60 seconds
+meetlite record --output ./team-sync     # choose output directory
+meetlite record --no-microphone          # system audio only
+meetlite record --no-system-audio        # microphone only
 ```
 
-Meetlite writes `audio.wav` and `metadata.json` to the output directory. Without
-`--output`, it creates a timestamped `meetlite-...` directory in the current
-working directory.
+Meetlite writes:
+
+```text
+team-sync/
+  audio.wav
+  metadata.json
+```
+
+Without `--output`, it creates a timestamped `meetlite-...` directory in the
+current working directory. Press Ctrl-C to stop a recording cleanly.
 
 ## Transcription
 
-Create the default configuration file:
+Create a config file:
 
 ```bash
-./meetlite config init
+meetlite config init
 ```
 
-Edit `~/.config/meetlite/config.json` to add your speech-to-text provider. For
-example, use an API key kept in an environment variable:
+Edit `~/.config/meetlite/config.json` and add an OpenAI-compatible speech-to-text
+provider. Keep API keys in environment variables:
 
 ```json
 {
@@ -107,50 +113,59 @@ example, use an API key kept in an environment variable:
 }
 ```
 
-Set the key, then transcribe an existing recording:
+Transcribe an existing recording:
 
 ```bash
 export MEETLITE_STT_API_KEY='...'
-./meetlite transcribe ./team-sync/audio.wav
+meetlite transcribe ./team-sync/audio.wav
 ```
 
 Record and transcribe live:
 
 ```bash
-./meetlite record --transcribe --duration 60 --output ./live-sync
+meetlite record --transcribe --duration 60 --output ./live-sync
 ```
 
-Live transcription preserves `audio.wav`, writes progress to `transcript.jsonl`,
-and writes the completed result to `transcript.json`.
-
-Meetlite refuses to replace an existing output directory or generated transcript
-by default. Use `--force` to replace Meetlite artifacts in a specified recording
-directory or an existing `transcript.json`.
+Live transcription keeps `audio.wav`, writes progress to `transcript.jsonl`, and
+writes the final transcript to `transcript.json`.
 
 ## Summaries
 
-Configure an OpenAI-compatible chat-completions endpoint in the `llm` section,
-then summarize one existing transcript. Meetlite writes `summary.md` beside the
-transcript; summaries are optional and never affect recording or transcription
-artifacts.
+Configure an OpenAI-compatible chat-completions endpoint in the `llm` section:
 
-```bash
-./meetlite summarize ./team-sync/transcript.json
+```json
+{
+  "llm": {
+    "base_url": "http://127.0.0.1:8321/v1",
+    "model": "gpt-4o-mini",
+    "auth": {
+      "type": "bearer",
+      "token_env": "MEETLITE_LLM_API_KEY"
+    },
+    "instructions": "Correct names and domain terminology before summarizing."
+  }
+}
 ```
 
-Meetlite refuses to replace an existing `summary.md`; use `--force` to rewrite it.
-
-Use `llm.instructions` for names, terminology, and other transcription
-corrections before the model creates the Markdown summary.
-
-To run the full recording pipeline, including the final summary:
+Then summarize a transcript:
 
 ```bash
-./meetlite record --summarize --duration 60 --output ./team-sync
+export MEETLITE_LLM_API_KEY='...'
+meetlite summarize ./team-sync/transcript.json
 ```
 
-## More references/docs
+Or run the full pipeline:
+
+```bash
+meetlite record --summarize --duration 60 --output ./team-sync
+```
+
+Meetlite writes `summary.md` beside the transcript. It will not overwrite an
+existing transcript or summary unless you pass `--force`.
+
+## More docs
 
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Build from source](docs/building.md)
+- [Project plan](PLAN.md)
