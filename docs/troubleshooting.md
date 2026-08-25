@@ -31,7 +31,7 @@ Current macOS release agents are ad-hoc signed and not notarized. macOS can show
 a Gatekeeper warning and may ask again for Audio Capture permission after an
 agent update.
 
-## Debian 11 / Linux: no system audio
+## Linux: no system audio
 
 Meetlite records the current default PulseAudio monitor by default. Check that a
 PulseAudio-compatible server is running:
@@ -50,9 +50,10 @@ If PulseAudio is unavailable, configure an ALSA capture device in
 `recording.system_device`. For `snd-aloop`, a common capture device is
 `hw:Loopback,1,0`.
 
-## Debian 11 / Linux: missing libraries
+## Linux: missing libraries
 
-If the release binary fails to start, install the runtime libraries:
+If the release binary fails to start, install the runtime libraries. On
+Debian/Ubuntu:
 
 ```bash
 sudo apt install libasound2 libpulse0 ca-certificates

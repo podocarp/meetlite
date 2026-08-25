@@ -3,9 +3,9 @@
 ## Project
 
 Meetlite is a Rust CLI for local 48 kHz mono PCM WAV recording and optional
-OpenAI-compatible transcription. Recording has been tested on macOS and Debian
-11 Linux. Read `PLAN.md` before changing capture, persistence, or transcription
-behavior.
+OpenAI-compatible transcription. Recording is cross-platform by design; the
+current tested checkpoint is macOS and Debian 11 Linux. Read `PLAN.md` before
+changing capture, persistence, or transcription behavior.
 
 ## Architecture
 

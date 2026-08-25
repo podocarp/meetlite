@@ -20,7 +20,7 @@ Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
 ## Minimal config
 
 Recording works without transcription or summary settings. The default config is
-enough for tested macOS and Debian 11 recording setups:
+enough for the tested macOS and Linux recording paths:
 
 ```json
 {
@@ -51,12 +51,12 @@ enough for tested macOS and Debian 11 recording setups:
 On macOS, system audio is captured from the default output through
 `MeetliteCapture.app`; `recording.system_device` is not used.
 
-On Debian 11 and other Linux desktops, Meetlite first records the current default
-PulseAudio sink monitor. PipeWire works when its PulseAudio compatibility server
-is running. If no PulseAudio monitor is available, set `recording.system_device`
-to an ALSA PCM capture device. For `snd-aloop`, use the capture side paired with
-your playback device, for example `hw:Loopback,1,0` when audio is sent to
-`hw:Loopback,0,0`.
+On Linux, Meetlite first records the current default PulseAudio sink monitor.
+PipeWire works when its PulseAudio compatibility server is running. Debian 11 is
+just the distro this path has been tested on so far, not a special target. If no
+PulseAudio monitor is available, set `recording.system_device` to an ALSA PCM
+capture device. For `snd-aloop`, use the capture side paired with your playback
+device, for example `hw:Loopback,1,0` when audio is sent to `hw:Loopback,0,0`.
 
 ## Transcription settings
 

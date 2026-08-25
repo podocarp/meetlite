@@ -54,10 +54,11 @@ bash scripts/record-beep-test.sh
 The beep test builds the app, records system audio, and inspects the resulting
 WAV file.
 
-## Debian 11 / Linux
+## Linux
 
-Recording has been tested on Debian 11 x86_64. Linux builds require Rust,
-`pkg-config`, ALSA development headers, and the PulseAudio client library.
+Linux recording is intended to work across distributions. Debian 11 x86_64 is the
+current tested checkpoint. Linux builds require Rust, `pkg-config`, ALSA
+development headers, and the PulseAudio client library.
 
 ```bash
 sudo apt update
@@ -80,7 +81,7 @@ target/release/meetlite record --duration 60 --output ./meeting
 ```
 
 Microphone capture uses CPAL. System audio first records the current default
-PulseAudio monitor, which is the normal path on Debian 11 desktop sessions. This
+PulseAudio monitor, which is the normal path on many Linux desktop sessions. This
 also works on PipeWire desktops when the PulseAudio compatibility server is
 running.
 
@@ -137,7 +138,7 @@ bash scripts/build-macos-app.sh
 - macOS system audio uses a Core Audio process tap through `MeetliteCapture.app`.
 - Linux system audio uses PulseAudio first, then an explicitly configured ALSA
   fallback.
-- Windows system-audio capture is not supported yet.
+- Windows system-audio capture is planned but not implemented yet.
 
 Meetlite uses native CI runners and Cargo target triples for platform builds.
 Feature flags should be reserved for optional capabilities, not operating-system
