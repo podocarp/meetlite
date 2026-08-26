@@ -5,75 +5,66 @@
 # Meetlite
 
 > [!NOTE]
-> Meetlite is early software. Release artifacts are experimental; back up
-> recordings and verify capture on your hardware before relying on it.
+> Meetlite is early software. Notably, windows support is still missing!
 
 Meetlite is a simple CLI meeting recorder and optional transcriber and
 summarizer. It's born out of my frustration at the lack of a simple,
 low-resource consumption tool that can eventually work across the machines I
 actually use.
 
+In summary: Unix philosophy. I just want a tool that does recording, mixing,
+filtering really well (it is harder than you think!), and optionally hooks into
+separate transcription and summarization APIs downstream for convenience.
+
 It is heavily inspired by [meetily](https://github.com/Zackriya-Solutions/meetily)
 but I wanted to solve two problems with such offerings:
 
 - Bloat: I didn't want another JS stack running a GUI eating into the precious
-  VRAM I need for larger whisper and LLM models. I am already heavily swapping
-  on a MacBook Air with all the Electron apps and browsers; I have no resources
-  to run another GUI and whisper and llama in the background.
-- External models: meetily, due to wanting to handle transcription and
-  summarization locally, had difficulty hooking into external APIs. `Meetlite`
-  does not force you into anything, so you can choose hosted models, self-hosted
-  models, on-device models, or just save the WAV files and do whatever you want
-  with them later.
+  VRAM I need for larger whisper and LLM models. How to be local first if
+  regular Joes can't run it locally?
+- External models: `Meetlite` does not force you using any specific architecture
+  or backends, so if you can't run models locally you can choose model
+  providers, self-hosted models,  or just treat it as a regular voice recorder!
 
-In summary: unix philosophy. I just want a tool that does recording, mixing,
-filtering really well (it is harder than you think!), and optionally hooks into
-separate transcription and summarization APIs downstream for convenience.
+However, this will necessitate more setup, so if you're just looking for a
+wheels included experience you can try out meetily instead.
 
 ## Platform status
 
-The goal is cross-platform recording. The current checkpoint is:
-
-- macOS recording has been tested on Apple Silicon.
-- Linux recording has been tested on Debian 11 x86_64.
-
-That does **not** mean Debian is the only Linux target. The Linux path records the
-current default PulseAudio monitor, which is the common desktop route and also
-works on PipeWire systems with PulseAudio compatibility enabled. If no PulseAudio
-server is available, configure an ALSA fallback such as `snd-aloop`.
+The goal is cross-platform recording. Audio is actually quite hard since every
+platform uses their own APIs (and Linux on its own has like 20). I've tested:
+- macOS recording has been tested on Apple Silicon (Intel not supported).
+- Linux (ALSA and PulseAudio) recording has been tested on Debian 11 x86_64.
+- Linux (ALSA) recording has been tested on Debian 10 x86_64. Couldn't get PulseAudio to work.
 
 Windows system-audio capture is not implemented yet.
 
 ## Install
 
-### macOS
+```bash
+curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install.sh | sh
+```
 
-1. Open the [latest release](https://github.com/podocarp/meetlite/releases/latest).
-2. Download `meetlite-macos-aarch64.zip` for Apple Silicon.
-3. Unzip it and run `meetlite setup` from the folder containing `meetlite`.
+This installs `meetlite` to `~/.local/bin` by default and adds that directory to
+your active shell profile when needed. Set `INSTALL_DIR` to choose another
+location:
 
 ```bash
-./meetlite setup
+curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
 > [!NOTE]
-> On macOS this downloads an additional app from GitHub Releases to
-> `~/Library/Application Support/Meetlite/MeetliteCapture.app`. This capture
-> companion handles signing and TCC permissions so the CLI can capture system
-> audio without requiring manual `open` commands or flags.
+> On macOS the installer also installs the LaunchServices capture companion to
+> `~/Library/Application Support/Meetlite/MeetliteCapture.app`. This companion
+> handles signing and TCC permissions so the CLI can capture system audio without
+> requiring manual `open` commands or flags.
 
-You can move `meetlite` anywhere you prefer and run it with `./meetlite`.
+### Manual install
 
-### Linux
-
-1. Open the [latest release](https://github.com/podocarp/meetlite/releases/latest).
-2. Download `meetlite-linux-x86_64.tar.gz`.
-3. Extract the CLI:
-
-```bash
-tar -xzf meetlite-linux-x86_64.tar.gz
-./meetlite record
-```
+Download the matching archive from the
+[latest release](https://github.com/podocarp/meetlite/releases/latest), extract
+`meetlite`, and on macOS copy `MeetliteCapture.app` to
+`~/Library/Application Support/Meetlite/`.
 
 The Linux archive is currently not self-contained. It requires a compatible
 glibc plus PulseAudio and ALSA runtime libraries on the host. On Debian/Ubuntu,

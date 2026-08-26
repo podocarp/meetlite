@@ -36,8 +36,6 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Install or update the macOS system-audio capture companion.
-    Setup,
     /// Internal macOS capture companion. Launched only by MeetliteCapture.app.
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
@@ -148,5 +146,10 @@ mod tests {
     #[test]
     fn summarize_requires_an_existing_input() {
         assert!(Cli::try_parse_from(["meetlite", "summarize"]).is_err());
+    }
+
+    #[test]
+    fn setup_is_not_a_public_command() {
+        assert!(Cli::try_parse_from(["meetlite", "setup"]).is_err());
     }
 }

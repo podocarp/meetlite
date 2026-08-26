@@ -38,7 +38,6 @@ fn main() -> Result<()> {
             println!("{}", Config::path(cli.config.as_deref())?.display());
         }
         Command::Devices => list_devices()?,
-        Command::Setup => setup::run()?,
         Command::Record(args) => {
             if args.transcribe || args.summarize {
                 let config = Config::load(cli.config.as_deref())?;

@@ -16,9 +16,10 @@ changing capture, persistence, or transcription behavior.
 - The CLI launches `MeetliteCapture.app` through LaunchServices. The agent
   authenticates to a loopback TCP listener with a one-time random token and
   streams timestamped PCM to the CLI mixer.
-- `src/setup.rs` downloads and installs the agent at
+- `scripts/install.sh` installs the agent at
   `~/Library/Application Support/Meetlite/MeetliteCapture.app`; it keeps the
-  previous app as `.previous` for rollback.
+  previous app as `.previous` for rollback. `src/setup.rs` only records the
+  installed path used by the recorder.
 
 Do not move mixing, WAV output, transcription, or application state into the
 capture agent. Keep the process tap permission boundary small.
@@ -44,7 +45,7 @@ release before uploading with `--clobber`, so jobs do not race to create it.
 
 - Required GitHub secret: `MEETLITE_MANIFEST_SIGNING_KEY`, a base64-encoded PEM
   Ed25519 private key.
-- The corresponding public key is pinned in `src/setup.rs`.
+- Older CLIs pin the corresponding public key in `src/setup.rs`.
 - Canonical manifest payload:
 
 ```text
@@ -67,7 +68,7 @@ nix develop --command cargo test
 nix develop --command bash scripts/build-macos-app.sh
 ```
 
-Use `scripts/record-beep-test.sh` for a manual system-audio smoke test. Run
-`meetlite setup` against published releases to validate installer updates. Do
-not use the archived Meetily application as a runtime dependency; it is a
-reference implementation only.
+Use `scripts/record-beep-test.sh` for a manual system-audio smoke test. Run the
+published `scripts/install.sh` flow to validate installer updates. Do not use the
+archived Meetily application as a runtime dependency; it is a reference
+implementation only.

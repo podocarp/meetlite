@@ -40,7 +40,12 @@ jobs:
           CLI_ARCHIVE="meetlite-macos-$ARCHITECTURE.zip"
           AGENT_ARCHIVE="MeetliteCapture-macos-$ARCHITECTURE.app.zip"
           MANIFEST="MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
-          ditto -c -k --sequesterRsrc dist/meetlite "$CLI_ARCHIVE"
+          CLI_PACKAGE="meetlite-macos-$ARCHITECTURE"
+          rm -rf "$CLI_PACKAGE"
+          mkdir -p "$CLI_PACKAGE"
+          cp dist/meetlite "$CLI_PACKAGE/meetlite"
+          ditto dist/MeetliteCapture.app "$CLI_PACKAGE/MeetliteCapture.app"
+          ditto -c -k --sequesterRsrc "$CLI_PACKAGE" "$CLI_ARCHIVE"
           ditto -c -k --sequesterRsrc --keepParent dist/MeetliteCapture.app "$AGENT_ARCHIVE"
           ARCHIVE_SHA256="$(shasum -a 256 "$AGENT_ARCHIVE" | cut -d ' ' -f 1)"
           ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/$AGENT_ARCHIVE"
@@ -83,7 +88,9 @@ jobs:
           done
           gh release view "$TAG" >/dev/null
           gh release upload "$TAG" --clobber \
-           "meetlite-macos-$ARCHITECTURE.zip" \
-           "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
-           "MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
+            "meetlite-macos-$ARCHITECTURE.zip" \
+            "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
+            "MeetliteCapture-macos-$ARCHITECTURE.manifest.json" \
+            scripts/install.sh
+
           BASH

@@ -39,9 +39,9 @@ Run the development CLI directly:
 dist/meetlite record --duration 60
 ```
 
-`meetlite setup` downloads a published capture companion for release builds. A
-source build uses the sibling `dist/MeetliteCapture.app` when no installed agent
-is present.
+The release installer places the capture companion at
+`~/Library/Application Support/Meetlite/MeetliteCapture.app`. A source build uses
+the sibling `dist/MeetliteCapture.app` when no installed agent is present.
 
 ### Verify
 

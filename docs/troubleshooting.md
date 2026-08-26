@@ -5,10 +5,9 @@
 System audio requires macOS 14.4 or later and Audio Capture permission for
 **Meetlite Capture**.
 
-Run setup, start a recording, and accept the prompt:
+Install Meetlite with `scripts/install.sh`, start a recording, and accept the prompt:
 
 ```bash
-meetlite setup
 meetlite record --duration 10 --output ./permission-test
 ```
 
@@ -24,8 +23,8 @@ audio source during a short test:
 meetlite record --no-microphone --duration 10 --output ./system-test
 ```
 
-Listen to `./system-test/audio.wav`. Run `meetlite setup` again if the capture
-agent is missing or outdated.
+Listen to `./system-test/audio.wav`. Re-run the installer if the capture agent
+is missing or outdated.
 
 Current macOS release agents are ad-hoc signed and not notarized. macOS can show
 a Gatekeeper warning and may ask again for Audio Capture permission after an

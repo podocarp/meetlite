@@ -227,7 +227,7 @@ fn capture_agent_path() -> Result<PathBuf> {
     }
     if !sibling_agent.join("Contents/MacOS/meetlite").is_file() {
         bail!(
-            "MeetliteCapture.app is unavailable at {} or {}; run `meetlite setup` or place it beside the meetlite executable",
+            "MeetliteCapture.app is unavailable at {} or {}; install Meetlite with scripts/install.sh or place it beside the meetlite executable",
             installed.display(),
             sibling_agent.display()
         )
