@@ -1,3 +1,5 @@
+mod adapter;
+mod artifacts;
 #[cfg(target_os = "linux")]
 mod linux_system;
 #[cfg(target_os = "macos")]
@@ -5,36 +7,27 @@ mod macos_capture_agent;
 #[cfg(target_os = "macos")]
 mod macos_system;
 mod microphone;
+mod plan;
 #[cfg(target_os = "linux")]
 mod pulse_system;
+mod session;
 
 use std::{
     collections::VecDeque,
-    fs,
     io::{Seek, Write},
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use anyhow::{Context, Result};
 
 use crate::{cli::RecordArgs, config::RecordingConfig};
+use adapter::BoxedCaptureAdapter;
+use adapter::PlatformCaptureAdapterFactory;
+pub use artifacts::RecordingOutput;
 #[cfg(target_os = "macos")]
 pub(crate) use macos_capture_agent::run_capture_agent;
-#[cfg(target_os = "macos")]
-use macos_capture_agent::AgentSystemAudioCapture;
-use microphone::MicrophoneCapture;
-
-#[cfg(target_os = "macos")]
-type SystemAudioCapture = AgentSystemAudioCapture;
-#[cfg(target_os = "linux")]
-type SystemAudioCapture = linux_system::SystemAudioCapture;
+use plan::RecordingPlan;
+use session::{CallbackSink, RecordingSession};
 
 const SAMPLE_RATE: u32 = 48_000;
 const WINDOW_SAMPLES: usize = 960;
@@ -256,12 +249,6 @@ pub fn record(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()> 
     record_with_samples(args, config, |_| {}, |_| {}).map(|_| ())
 }
 
-#[derive(Clone)]
-pub struct RecordingOutput {
-    pub output_dir: PathBuf,
-    pub audio_file: PathBuf,
-}
-
 pub fn record_with_samples(
     args: RecordArgs,
     config: Option<&RecordingConfig>,
@@ -271,141 +258,21 @@ pub fn record_with_samples(
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (args, config, on_started, on_samples);
-        bail!("recording is currently supported only on macOS and Linux")
+        anyhow::bail!("recording is currently supported only on macOS and Linux")
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        record_platform(args, config, on_started, on_samples)
+        let plan = RecordingPlan::from_args(args, config)?;
+        let factory = PlatformCaptureAdapterFactory;
+        RecordingSession::new(plan, &factory, CallbackSink::new(on_started, on_samples)).run()
     }
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn record_platform(
-    args: RecordArgs,
-    config: Option<&RecordingConfig>,
-    on_started: impl FnOnce(&RecordingOutput),
-    mut on_samples: impl FnMut(&[i16]),
-) -> Result<RecordingOutput> {
-    if args.no_microphone && args.no_system_audio {
-        bail!("at least one audio source must be enabled")
-    }
-
-    let output_dir = output_dir(args.output.as_deref(), args.force)?;
-    let output_file = output_dir.join("audio.wav");
-    on_started(&RecordingOutput {
-        output_dir: output_dir.clone(),
-        audio_file: output_file.clone(),
-    });
-    let microphone_gain = args
-        .microphone_gain
-        .unwrap_or_else(|| config.map_or(MIC_GAIN, |config| config.microphone_gain));
-    let system_gain = args
-        .system_gain
-        .unwrap_or_else(|| config.map_or(SYSTEM_GAIN, |config| config.system_gain));
-    if !microphone_gain.is_finite()
-        || microphone_gain < 0.0
-        || !system_gain.is_finite()
-        || system_gain < 0.0
-    {
-        bail!("recording gains must be finite, non-negative numbers")
-    }
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let signal_stop = Arc::clone(&stop);
-    ctrlc::set_handler(move || signal_stop.store(true, Ordering::Release))
-        .context("could not install Ctrl-C handler")?;
-
-    let mut microphone = (!args.no_microphone)
-        .then(|| {
-            MicrophoneCapture::start(config.and_then(|config| config.microphone_device.as_deref()))
-        })
-        .transpose()?;
-    if microphone
-        .as_ref()
-        .is_some_and(|capture| capture.sample_rate() != SAMPLE_RATE)
-    {
-        bail!("microphone does not deliver 48000 Hz; resampling is not implemented yet")
-    }
-    let mut system = (!args.no_system_audio)
-        .then(|| start_system_audio(config))
-        .transpose()?;
-    if system
-        .as_ref()
-        .is_some_and(|capture| capture.sample_rate() != SAMPLE_RATE)
-    {
-        bail!("system output does not deliver 48000 Hz; resampling is not implemented yet")
-    }
-
-    let started_at = Instant::now();
-    let started_at_unix_ms = unix_time_ms();
-    let mut mixer = Mixer::new(started_at, microphone_gain, system_gain);
-    let specification = hound::WavSpec {
-        channels: 1,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(&output_file, specification)
-        .with_context(|| format!("could not create {}", output_file.display()))?;
-
-    println!("Recording to {}", output_file.display());
-    println!("Press Ctrl-C to stop.");
-    let sample_limit = args
-        .duration
-        .map(|seconds| seconds.saturating_mul(SAMPLE_RATE as u64) as usize);
-    while !stop.load(Ordering::Acquire)
-        && args
-            .duration
-            .is_none_or(|seconds| started_at.elapsed() < Duration::from_secs(seconds))
-    {
-        drain_sources(&mut microphone, &mut system, &mut mixer);
-        mixer.write_ready(&mut writer, Instant::now(), sample_limit)?;
-        let samples = mixer.take_emitted_samples();
-        on_samples(&samples);
-        thread::sleep(Duration::from_millis(5));
-    }
-
-    // Dropping each stream is the producer acknowledgement: callbacks can no
-    // longer enqueue frames before the final source queues are drained.
-    let microphone_stats = microphone
-        .take()
-        .map(|capture| capture.stop(&mut mixer.microphone));
-    let system_stats = system.take().map(|capture| capture.stop(&mut mixer.system));
-    mixer.flush(&mut writer, sample_limit)?;
-    let samples = mixer.take_emitted_samples();
-    on_samples(&samples);
-    writer.finalize().context("could not finalize WAV file")?;
-
-    write_metadata(
-        &output_dir,
-        Metadata {
-            started_at_unix_ms,
-            ended_at_unix_ms: unix_time_ms(),
-            audio_file: "audio.wav",
-            sample_rate: SAMPLE_RATE,
-            channels: 1,
-            bits_per_sample: 16,
-            samples_written: mixer.samples_written,
-            microphone: SourceMetadata::from_capture(
-                !args.no_microphone,
-                microphone_gain,
-                microphone_stats,
-            ),
-            system: SourceMetadata::from_capture(!args.no_system_audio, system_gain, system_stats),
-        },
-    )?;
-    println!("Saved {}", output_file.display());
-    Ok(RecordingOutput {
-        output_dir,
-        audio_file: output_file,
-    })
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn drain_sources(
-    microphone: &mut Option<MicrophoneCapture>,
-    system: &mut Option<SystemAudioCapture>,
+    microphone: &mut Option<BoxedCaptureAdapter>,
+    system: &mut Option<BoxedCaptureAdapter>,
     mixer: &mut Mixer,
 ) {
     if let Some(capture) = microphone {
@@ -416,110 +283,10 @@ fn drain_sources(
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn start_system_audio(config: Option<&RecordingConfig>) -> Result<SystemAudioCapture> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = config;
-        AgentSystemAudioCapture::start()
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        SystemAudioCapture::start(config.and_then(|config| config.system_device.as_deref()))
-    }
-}
-
-#[derive(Serialize)]
-struct Metadata<'a> {
-    started_at_unix_ms: u128,
-    ended_at_unix_ms: u128,
-    audio_file: &'a str,
-    sample_rate: u32,
-    channels: u8,
-    bits_per_sample: u8,
-    samples_written: usize,
-    microphone: SourceMetadata,
-    system: SourceMetadata,
-}
-
-#[derive(Serialize)]
-struct SourceMetadata {
-    enabled: bool,
-    gain: f32,
-    dropped_callback_frames: u64,
-    dropped_buffered_frames: u64,
-}
-
-impl SourceMetadata {
-    fn from_capture(enabled: bool, gain: f32, statistics: Option<CaptureStatistics>) -> Self {
-        let statistics = statistics.unwrap_or_default();
-        Self {
-            enabled,
-            gain,
-            dropped_callback_frames: statistics.dropped_callback_frames,
-            dropped_buffered_frames: statistics.dropped_buffered_frames,
-        }
-    }
-}
-
-fn write_metadata(output_dir: &Path, metadata: Metadata<'_>) -> Result<()> {
-    let path = output_dir.join("metadata.json");
-    let temporary_path = output_dir.join("metadata.json.tmp");
-    let contents = serde_json::to_vec_pretty(&metadata)?;
-    fs::write(&temporary_path, contents)
-        .with_context(|| format!("could not write {}", temporary_path.display()))?;
-    fs::rename(&temporary_path, &path)
-        .with_context(|| format!("could not atomically write {}", path.display()))
-}
-
-fn unix_time_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time is after the Unix epoch")
-        .as_millis()
-}
-
-fn output_dir(configured: Option<&Path>, force: bool) -> Result<PathBuf> {
-    let path = match configured {
-        Some(path) => path.to_path_buf(),
-        None => PathBuf::from(format!("meetlite-{}", unix_time_ms())),
-    };
-    if path.exists() {
-        if !force {
-            bail!(
-                "refusing to use existing output directory {}; pass --force to replace Meetlite artifacts",
-                path.display()
-            )
-        }
-        for name in [
-            "audio.wav",
-            "metadata.json",
-            "metadata.json.tmp",
-            "transcript.json",
-            "transcript.jsonl",
-            "summary.md",
-        ] {
-            let artifact = path.join(name);
-            if artifact.exists() {
-                fs::remove_file(&artifact)
-                    .with_context(|| format!("could not remove {}", artifact.display()))?;
-            }
-        }
-        let chunks = path.join("chunks");
-        if chunks.exists() {
-            fs::remove_dir_all(&chunks)
-                .with_context(|| format!("could not remove {}", chunks.display()))?;
-        }
-    } else {
-        fs::create_dir(&path)
-            .with_context(|| format!("could not create output directory {}", path.display()))?;
-    }
-    Ok(path)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     fn frame(source: SourceKind, start: Instant, samples: Vec<f32>) -> AudioFrame {
@@ -578,8 +345,8 @@ mod tests {
         fs::create_dir(directory.path().join("chunks")).unwrap();
         fs::write(directory.path().join("chunks/old.wav"), "old chunk").unwrap();
 
-        assert!(output_dir(Some(directory.path()), false).is_err());
-        output_dir(Some(directory.path()), true).unwrap();
+        assert!(artifacts::output_dir(Some(directory.path()), false).is_err());
+        artifacts::output_dir(Some(directory.path()), true).unwrap();
 
         assert!(!directory.path().join("audio.wav").exists());
         assert!(!directory.path().join("chunks").exists());
