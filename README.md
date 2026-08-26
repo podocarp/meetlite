@@ -59,15 +59,8 @@ curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install
 > handles signing and TCC permissions so the CLI can capture system audio without
 > requiring manual `open` commands or flags.
 
-### Manual install
-
-Download the matching archive from the
-[latest release](https://github.com/podocarp/meetlite/releases/latest), extract
-`meetlite`, and on macOS copy `MeetliteCapture.app` to
-`~/Library/Application Support/Meetlite/`.
-
 The Linux archive is currently not self-contained. It requires a compatible
-glibc plus PulseAudio and ALSA runtime libraries on the host. On Debian/Ubuntu,
+glibc plus PulseAudio or ALSA runtime libraries on the host. On Debian/Ubuntu,
 that usually means:
 
 ```bash
@@ -80,6 +73,10 @@ PulseAudio server is available, configure an ALSA fallback in
 `recording.system_device`; `snd-aloop` uses values such as `hw:Loopback,1,0`.
 See [Build from source](docs/building.md) for build prerequisites and headless
 capture tests.
+
+JACK is not supported.
+
+Windows is not implemented, but will be once I get a windows machine to test on.
 
 ## Quick Start
 
