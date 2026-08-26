@@ -51,8 +51,9 @@ cargo test
 bash scripts/record-beep-test.sh
 ```
 
-The beep test builds the app, records system audio, and inspects the resulting
-WAV file.
+The beep test builds the app, rejects a generated silent recording as a negative
+control, records system audio, and verifies the resulting WAV contains a tone
+from the beep fixture.
 
 ## Linux
 

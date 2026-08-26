@@ -8,6 +8,7 @@ readonly fixture="$repo_root/beep-02.wav"
 readonly cli="$repo_root/dist/meetlite"
 readonly duration_seconds=8
 readonly playback_delay_seconds=2
+readonly playback_rate=12
 readonly temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/meetlite-beep-test.XXXXXX")"
 readonly output_directory="$temporary_directory/recording"
 
@@ -16,11 +17,30 @@ if [[ ! -f "$fixture" ]]; then
   exit 1
 fi
 
+silent_recording="$temporary_directory/silent.wav"
+python3 - "$silent_recording" <<'PY'
+import sys
+import wave
+
+with wave.open(sys.argv[1], "wb") as recording:
+    recording.setnchannels(1)
+    recording.setsampwidth(2)
+    recording.setframerate(48_000)
+    recording.writeframes(bytes(48_000 * 2))
+PY
+if python3 "$repo_root/scripts/analyze-recording.py" \
+  "$fixture" \
+  "$silent_recording" \
+  "$playback_rate" >/dev/null 2>&1; then
+  printf 'Silent recording was accepted by analyzer\n' >&2
+  exit 1
+fi
+
 bash "$repo_root/scripts/build-macos-app.sh"
 
 (
   sleep "$playback_delay_seconds"
-  afplay -r 12 "$fixture"
+  afplay -r "$playback_rate" "$fixture"
 ) &
 player_pid=$!
 
@@ -31,5 +51,9 @@ player_pid=$!
 
 wait "$player_pid" || true
 afinfo "$output_directory/audio.wav"
+python3 "$repo_root/scripts/analyze-recording.py" \
+  "$fixture" \
+  "$output_directory/audio.wav" \
+  "$playback_rate"
 test -s "$output_directory/metadata.json"
 printf 'Recording written to %s\n' "$output_directory/audio.wav"

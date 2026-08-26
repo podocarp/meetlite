@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod pipeline;
 mod recording;
+#[cfg(target_os = "macos")]
 mod setup;
 mod summary;
 mod transcription;
