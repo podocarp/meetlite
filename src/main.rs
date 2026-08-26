@@ -1,15 +1,14 @@
 mod cli;
 mod config;
+mod pipeline;
 mod recording;
 mod setup;
 mod summary;
 mod transcription;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand};
-use config::Config;
-use cpal::traits::{DeviceTrait, HostTrait};
+use cli::Cli;
 
 fn main() -> Result<()> {
     // LaunchServices passes a legacy process-serial argument to app executables.
@@ -23,116 +22,5 @@ fn main() -> Result<()> {
     #[cfg(not(target_os = "macos"))]
     let cli = Cli::parse();
 
-    match cli.command {
-        #[cfg(target_os = "macos")]
-        Command::CaptureAgent(args) => recording::run_capture_agent(args.port, args.token)?,
-        Command::Config {
-            command: ConfigCommand::Init,
-        } => {
-            let path = Config::initialize(cli.config.as_deref())?;
-            println!("Created configuration at {}", path.display());
-        }
-        Command::Config {
-            command: ConfigCommand::Path,
-        } => {
-            println!("{}", Config::path(cli.config.as_deref())?.display());
-        }
-        Command::Devices => list_devices()?,
-        Command::Record(args) => {
-            if args.transcribe || args.summarize {
-                let config = Config::load(cli.config.as_deref())?;
-                let transcript = transcription::transcribe_live(
-                    args.clone(),
-                    Some(&config.recording),
-                    config.stt()?.clone(),
-                )?;
-                if args.summarize {
-                    let transcript_path = std::path::Path::new(&transcript.source_path)
-                        .parent()
-                        .context("live recording audio path must include a parent directory")?
-                        .join("transcript.json");
-                    let output =
-                        summary::summarize(&transcript_path, config.llm.as_ref(), args.force)?;
-                    if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&output)?);
-                    } else {
-                        println!("{}", output.summary_path.display());
-                    }
-                } else if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&transcript)?);
-                }
-            } else {
-                let config = Config::load_if_present(cli.config.as_deref())?;
-                recording::record(args, config.as_ref().map(|config| &config.recording))?;
-            }
-        }
-        Command::Transcribe(args) => {
-            let config = Config::load(cli.config.as_deref())?;
-            let transcript = transcription::transcribe_file(
-                &args.input,
-                args.output.as_deref(),
-                config.stt()?,
-                args.force,
-            )?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&transcript)?);
-            } else {
-                println!("{}", transcript.text);
-            }
-        }
-        Command::Summarize(args) => {
-            let config = Config::load(cli.config.as_deref())?;
-            let output = summary::summarize(&args.input, config.llm.as_ref(), args.force)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&output)?);
-            } else {
-                println!("{}", output.summary_path.display());
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn list_devices() -> Result<()> {
-    let host = cpal::default_host();
-
-    println!("Microphones:");
-    let devices = host
-        .input_devices()
-        .context("could not enumerate microphone devices")?;
-    let mut found = false;
-
-    for device in devices {
-        found = true;
-        let name = device
-            .name()
-            .unwrap_or_else(|_| "<unavailable name>".into());
-        let default_marker = host
-            .default_input_device()
-            .and_then(|default| default.name().ok())
-            .is_some_and(|default_name| default_name == name);
-        println!(
-            "  {}{}",
-            name,
-            if default_marker { " (default)" } else { "" }
-        );
-    }
-
-    if !found {
-        println!("  No microphone devices found.");
-    }
-
-    #[cfg(target_os = "macos")]
-    println!("\nSystem audio:\n  Default system output (captured by MeetliteCapture.app)");
-
-    #[cfg(target_os = "linux")]
-    println!(
-        "\nSystem audio:\n  Default PulseAudio monitor, with recording.system_device as an ALSA fallback."
-    );
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    println!("\nSystem audio:\n  Not implemented for this platform.");
-
-    Ok(())
+    pipeline::run(cli)
 }
