@@ -4,6 +4,10 @@ import sys
 import wave
 
 
+MIN_RESIDUAL_SNR_DB = 25.0
+MAX_SPIKES_PER_SECOND = 2.0
+
+
 def read_mono_i16(path):
     with wave.open(path, "rb") as recording:
         channels = recording.getnchannels()
@@ -72,6 +76,34 @@ def dominant_frequency(samples, rate):
     return frequency_peaks(samples, rate)[0]
 
 
+def sine_fit_quality(samples, rate, frequency):
+    active = loudest_window(samples, rate)
+    mean = sum(active) / len(active)
+    centered = [sample - mean for sample in active]
+    omega = 2 * math.pi * frequency / rate
+    sin_sum = cos_sum = 0.0
+    for index, sample in enumerate(centered):
+        phase = omega * index
+        sin_sum += sample * math.sin(phase)
+        cos_sum += sample * math.cos(phase)
+    sin_amp = 2 * sin_sum / len(centered)
+    cos_amp = 2 * cos_sum / len(centered)
+    residuals = []
+    for index, sample in enumerate(centered):
+        phase = omega * index
+        fitted = sin_amp * math.sin(phase) + cos_amp * math.cos(phase)
+        residuals.append(sample - fitted)
+    signal_rms = math.sqrt(sum(sample * sample for sample in centered) / len(centered))
+    residual_rms = math.sqrt(sum(error * error for error in residuals) / len(residuals))
+    residual_mean = sum(residuals) / len(residuals)
+    residual_variance = sum((error - residual_mean) ** 2 for error in residuals) / len(residuals)
+    residual_stddev = math.sqrt(residual_variance)
+    spike_threshold = max(500.0, residual_stddev * 8.0)
+    spikes = sum(1 for error in residuals if abs(error - residual_mean) >= spike_threshold)
+    snr_db = 20 * math.log10(signal_rms / residual_rms) if residual_rms else float("inf")
+    return snr_db, spikes / (len(active) / rate), residual_rms
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit("usage: analyze-recording.py FIXTURE RECORDING PLAYBACK_RATE")
@@ -97,8 +129,13 @@ def main():
         raise SystemExit(
             f"recording does not match beep tone: expected≈{expected} observed≈{observed:.0f}Hz peak={peak} rms={rms:.0f}"
         )
+    snr_db, spikes_per_second, residual_rms = sine_fit_quality(recording, recording_rate, matched)
+    if snr_db < MIN_RESIDUAL_SNR_DB or spikes_per_second > MAX_SPIKES_PER_SECOND:
+        raise SystemExit(
+            f"tone distortion detected: snr={snr_db:.1f}dB residual_rms={residual_rms:.0f} spikes/s={spikes_per_second:.2f} peak={peak} rms={rms:.0f}"
+        )
     print(
-        f"beep detected: expected≈{matched:.0f}Hz observed≈{observed:.0f}Hz peak={peak} rms={rms:.0f}"
+        f"tone detected: expected≈{matched:.0f}Hz observed≈{observed:.0f}Hz peak={peak} rms={rms:.0f} snr={snr_db:.1f}dB spikes/s={spikes_per_second:.2f}"
     )
 
 

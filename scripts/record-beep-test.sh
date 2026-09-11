@@ -4,18 +4,43 @@ set -euo pipefail
 # Build before scheduling playback so compilation time cannot consume the test.
 # The delayed player gives Core Audio time to start and request permissions.
 readonly repo_root="$(git rev-parse --show-toplevel)"
-readonly fixture="$repo_root/beep-02.wav"
 readonly cli="$repo_root/dist/meetlite"
-readonly duration_seconds=8
+readonly tone_frequency=1000
+readonly tone_duration_seconds=10
+readonly duration_seconds=14
 readonly playback_delay_seconds=2
-readonly playback_rate=12
-readonly temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/meetlite-beep-test.XXXXXX")"
+readonly playback_rate=1
+readonly temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/meetlite-tone-test.XXXXXX")"
+readonly fixture="$temporary_directory/tone.wav"
 readonly output_directory="$temporary_directory/recording"
 
-if [[ ! -f "$fixture" ]]; then
-  printf 'Missing test fixture: %s\n' "$fixture" >&2
-  exit 1
-fi
+python3 - "$fixture" "$tone_frequency" "$tone_duration_seconds" <<'PY'
+import math
+import sys
+import wave
+
+path = sys.argv[1]
+frequency = float(sys.argv[2])
+duration = float(sys.argv[3])
+rate = 48_000
+amplitude = 0.35
+fade_samples = int(rate * 0.02)
+sample_count = int(rate * duration)
+with wave.open(path, "wb") as recording:
+    recording.setnchannels(1)
+    recording.setsampwidth(2)
+    recording.setframerate(rate)
+    frames = bytearray()
+    for index in range(sample_count):
+        envelope = 1.0
+        if index < fade_samples:
+            envelope = index / fade_samples
+        elif sample_count - index <= fade_samples:
+            envelope = (sample_count - index) / fade_samples
+        sample = round(math.sin(2 * math.pi * frequency * index / rate) * amplitude * envelope * 32767)
+        frames.extend(int(sample).to_bytes(2, "little", signed=True))
+    recording.writeframes(frames)
+PY
 
 silent_recording="$temporary_directory/silent.wav"
 python3 - "$silent_recording" <<'PY'

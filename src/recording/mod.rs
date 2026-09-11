@@ -33,6 +33,8 @@ const SAMPLE_RATE: u32 = 48_000;
 const WINDOW_SAMPLES: usize = 960;
 const WINDOW_DURATION: Duration = Duration::from_millis(20);
 const MAX_BUFFERED_FRAMES: usize = 256;
+const MAX_FRAME_TIMESTAMP_SKEW_SAMPLES: f64 = 32.0;
+const MAX_INTERPOLATED_GAP_SAMPLES: usize = 32;
 const MIC_GAIN: f32 = 1.0;
 const SYSTEM_GAIN: f32 = 0.8;
 
@@ -59,6 +61,7 @@ impl AudioFrame {
 struct SourceBuffer {
     source: SourceKind,
     frames: VecDeque<AudioFrame>,
+    next_frame_start: Option<Instant>,
     dropped_frames: u64,
 }
 
@@ -67,14 +70,25 @@ impl SourceBuffer {
         Self {
             source,
             frames: VecDeque::new(),
+            next_frame_start: None,
             dropped_frames: 0,
         }
     }
 
-    fn push(&mut self, frame: AudioFrame) {
+    fn push(&mut self, mut frame: AudioFrame) {
         if frame.source != self.source {
             self.dropped_frames += 1;
             return;
+        }
+        if frame.sample_rate == SAMPLE_RATE {
+            if let Some(expected_start) = self.next_frame_start {
+                let skew_samples =
+                    signed_duration_seconds(frame.captured_at, expected_start) * SAMPLE_RATE as f64;
+                if skew_samples.abs() <= MAX_FRAME_TIMESTAMP_SKEW_SAMPLES {
+                    frame.captured_at = expected_start;
+                }
+            }
+            self.next_frame_start = Some(frame.ends_at());
         }
         if self.frames.len() == MAX_BUFFERED_FRAMES {
             self.frames.pop_front();
@@ -153,7 +167,7 @@ impl SourceBuffer {
                 index += 1;
             }
             let gap = index - start;
-            if gap > 2 || start == 0 || index >= filled.len() {
+            if gap > MAX_INTERPOLATED_GAP_SAMPLES || start == 0 || index >= filled.len() {
                 continue;
             }
             let before = output[start - 1];
@@ -301,6 +315,15 @@ pub fn record_with_samples(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+fn signed_duration_seconds(left: Instant, right: Instant) -> f64 {
+    if left >= right {
+        left.duration_since(right).as_secs_f64()
+    } else {
+        -right.duration_since(left).as_secs_f64()
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn drain_sources(
     microphone: &mut Option<BoxedCaptureAdapter>,
     system: &mut Option<BoxedCaptureAdapter>,
@@ -439,17 +462,10 @@ mod tests {
 
     #[test]
     fn source_buffer_interpolates_tiny_timestamp_gaps() {
-        let start = Instant::now();
-        let mut buffer = SourceBuffer::new(SourceKind::System);
-        buffer.push(frame(SourceKind::System, start, vec![0.25; 2]));
-        buffer.push(frame(
-            SourceKind::System,
-            start + Duration::from_secs_f64(3.0 / SAMPLE_RATE as f64),
-            vec![0.75; 1],
-        ));
+        let mut output = vec![0.25, 0.25, 0.0, 0.75];
+        let filled = vec![true, true, false, true];
 
-        let mut output = vec![0.0; 4];
-        buffer.mix_window(start, &mut output);
+        SourceBuffer::interpolate_tiny_gaps(&mut output, &filled);
 
         assert_eq!(output, vec![0.25, 0.25, 0.5, 0.75]);
     }
