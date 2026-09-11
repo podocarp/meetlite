@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -32,6 +32,8 @@ pub struct SystemAudioCapture {
 struct CallbackContext {
     sender: Sender<AudioFrame>,
     dropped_frames: Arc<AtomicU64>,
+    origin: Instant,
+    samples_captured: AtomicU64,
 }
 
 #[repr(C)]
@@ -57,6 +59,8 @@ impl SystemAudioCapture {
         let mut context = Box::new(CallbackContext {
             sender,
             dropped_frames: Arc::clone(&dropped_frames),
+            origin: Instant::now(),
+            samples_captured: AtomicU64::new(0),
         });
         let mut error = [0 as c_char; ERROR_BUFFER_LENGTH];
         let handle = unsafe {
@@ -121,12 +125,17 @@ unsafe extern "C" fn on_audio(samples: *const f32, sample_count: usize, context:
 
     let context = unsafe { &*(context as *const CallbackContext) };
     let samples = unsafe { std::slice::from_raw_parts(samples, sample_count) };
+    let sample_offset = context
+        .samples_captured
+        .fetch_add(sample_count as u64, Ordering::Relaxed);
+    let captured_at =
+        context.origin + Duration::from_secs_f64(sample_offset as f64 / super::SAMPLE_RATE as f64);
     if context
         .sender
         .try_send(AudioFrame {
             source: SourceKind::System,
-            captured_at: Instant::now(),
-            sample_rate: 48_000,
+            captured_at,
+            sample_rate: super::SAMPLE_RATE,
             samples: samples.to_vec(),
         })
         .is_err()

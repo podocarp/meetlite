@@ -106,6 +106,7 @@ impl SourceBuffer {
         }
 
         let end = start + WINDOW_DURATION;
+        let mut filled = vec![false; output.len()];
         for frame in &self.frames {
             if frame.captured_at >= end {
                 break;
@@ -125,11 +126,41 @@ impl SourceBuffer {
                 continue;
             }
             let count = (output.len() - output_start).min(frame.samples.len() - input_start);
-            for (destination, sample) in output[output_start..output_start + count]
+            for ((destination, occupied), sample) in output[output_start..output_start + count]
                 .iter_mut()
+                .zip(&mut filled[output_start..output_start + count])
                 .zip(&frame.samples[input_start..input_start + count])
             {
-                *destination += sample;
+                if !*occupied {
+                    *destination = *sample;
+                    *occupied = true;
+                }
+            }
+        }
+
+        Self::interpolate_tiny_gaps(output, &filled);
+    }
+
+    fn interpolate_tiny_gaps(output: &mut [f32], filled: &[bool]) {
+        let mut index = 0;
+        while index < filled.len() {
+            if filled[index] {
+                index += 1;
+                continue;
+            }
+            let start = index;
+            while index < filled.len() && !filled[index] {
+                index += 1;
+            }
+            let gap = index - start;
+            if gap > 2 || start == 0 || index >= filled.len() {
+                continue;
+            }
+            let before = output[start - 1];
+            let after = output[index];
+            for offset in 0..gap {
+                let ratio = (offset + 1) as f32 / (gap + 1) as f32;
+                output[start + offset] = before + (after - before) * ratio;
             }
         }
     }
@@ -387,6 +418,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(sample, i16::MAX);
+    }
+
+    #[test]
+    fn source_buffer_does_not_sum_overlapping_frames_from_the_same_source() {
+        let start = Instant::now();
+        let mut buffer = SourceBuffer::new(SourceKind::System);
+        buffer.push(frame(SourceKind::System, start, vec![0.25; 2]));
+        buffer.push(frame(
+            SourceKind::System,
+            start + Duration::from_secs_f64(1.0 / SAMPLE_RATE as f64),
+            vec![0.5; 2],
+        ));
+
+        let mut output = vec![0.0; 3];
+        buffer.mix_window(start, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25, 0.5]);
+    }
+
+    #[test]
+    fn source_buffer_interpolates_tiny_timestamp_gaps() {
+        let start = Instant::now();
+        let mut buffer = SourceBuffer::new(SourceKind::System);
+        buffer.push(frame(SourceKind::System, start, vec![0.25; 2]));
+        buffer.push(frame(
+            SourceKind::System,
+            start + Duration::from_secs_f64(3.0 / SAMPLE_RATE as f64),
+            vec![0.75; 1],
+        ));
+
+        let mut output = vec![0.0; 4];
+        buffer.mix_window(start, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25, 0.5, 0.75]);
     }
 
     #[test]
