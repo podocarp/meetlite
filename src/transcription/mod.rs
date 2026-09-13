@@ -13,8 +13,10 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::RecordArgs,
+    cli::CaptureArgs,
     config::{RecordingConfig, SttConfig},
+    credentials::Credentials,
+    output::Output,
     recording::{self, RecordingOutput},
 };
 
@@ -41,13 +43,19 @@ pub struct TranscriptSegment {
     pub text: String,
 }
 
+#[derive(Debug)]
+pub struct TranscriptionOutput {
+    pub transcript_path: PathBuf,
+}
+
 pub fn transcribe_file(
     input: &Path,
-    output: Option<&Path>,
+    output_directory: Option<&Path>,
     config: &SttConfig,
     force: bool,
-) -> Result<Transcript> {
-    let directory = output
+    output: Output,
+) -> Result<TranscriptionOutput> {
+    let directory = output_directory
         .map(Path::to_path_buf)
         .or_else(|| input.parent().map(Path::to_path_buf))
         .context("input audio path must include a parent directory")?;
@@ -59,19 +67,27 @@ pub fn transcribe_file(
             transcript_path.display()
         )
     }
-    let transcript = openai_compatible::transcribe(input, config)?;
+    let credentials = Credentials::for_stt(&config.auth)?;
+    let transcript = openai_compatible::transcribe(input, config, &credentials)?;
     write_json(&transcript_path, &transcript)?;
-    Ok(transcript)
+    emit_completed(output, &transcript, &transcript_path, true)?;
+    Ok(TranscriptionOutput { transcript_path })
 }
 
 pub fn transcribe_live(
-    args: RecordArgs,
+    args: CaptureArgs,
     recording_config: Option<&RecordingConfig>,
     stt: SttConfig,
-) -> Result<Transcript> {
+    output: Output,
+) -> Result<TranscriptionOutput> {
+    // Resolve credentials before capture so Keychain prompts never arrive mid-recording.
+    let credentials = Credentials::for_stt(&stt.auth)?;
     let (sender, receiver) = bounded(4);
     let (started_sender, started_receiver) = bounded(1);
-    let worker = thread::spawn(move || live_worker(receiver, started_receiver, stt));
+    let worker_output = output;
+    let worker = thread::spawn(move || {
+        live_worker(receiver, started_receiver, stt, credentials, worker_output)
+    });
     let mut chunker = Chunker::new(sender);
     let recording_result = recording::record_with_samples(
         args,
@@ -81,16 +97,31 @@ pub fn transcribe_live(
         },
         |samples| chunker.push(samples),
     );
+    drop(started_sender);
     chunker.finish();
     let dropped_chunks = std::mem::take(&mut chunker.dropped_chunks);
     drop(chunker);
-    let worker_result = worker.join().expect("live transcription worker panicked")?;
-    let output = recording_result?;
-    let dropped_failures = append_dropped_checkpoints(&output.output_dir, &dropped_chunks)?;
-    finalize_metadata(&output.output_dir, &worker_result, dropped_failures)?;
-    let transcript = worker_result.final_transcript(&output.audio_file);
-    write_json(&output.output_dir.join(TRANSCRIPT_FILE), &transcript)?;
-    Ok(transcript)
+    let worker_result = worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("live transcription worker panicked"))?;
+    let recording = recording_result?;
+    let worker_result = worker_result?;
+    let dropped_failures =
+        append_dropped_checkpoints(&recording.output_dir, &dropped_chunks, output)?;
+    finalize_metadata(&recording.output_dir, &worker_result, dropped_failures)?;
+    let transcript = worker_result.final_transcript(&recording.audio_file);
+    let transcript_path = recording.output_dir.join(TRANSCRIPT_FILE);
+    write_json(&transcript_path, &transcript)?;
+    emit_completed(output, &transcript, &transcript_path, false)?;
+    if !output.is_json() {
+        output.blank_line();
+        output.status(
+            "Saved recording",
+            &recording.audio_file.display().to_string(),
+        );
+        output.status("Saved transcript", &transcript_path.display().to_string());
+    }
+    Ok(TranscriptionOutput { transcript_path })
 }
 
 struct AudioChunk {
@@ -205,16 +236,18 @@ fn live_worker(
     receiver: Receiver<AudioChunk>,
     started: Receiver<RecordingOutput>,
     config: SttConfig,
+    credentials: Credentials,
+    output: Output,
 ) -> Result<WorkerResult> {
-    let output = started
+    let recording = started
         .recv()
         .context("recorder did not provide an output directory")?;
-    let chunks = output.output_dir.join("chunks");
+    let chunks = recording.output_dir.join("chunks");
     fs::create_dir_all(&chunks)?;
     let mut checkpoints = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(output.output_dir.join("transcript.jsonl"))?;
+        .open(recording.output_dir.join("transcript.jsonl"))?;
     let mut completed = Vec::new();
     let mut failed_chunks = 0;
     while let Ok(chunk) = receiver.recv() {
@@ -222,7 +255,7 @@ fn live_worker(
         write_chunk(&path, &chunk.samples)?;
         let start_seconds = chunk.start_sample as f64 / 48_000.0;
         let chunk_duration_seconds = chunk.samples.len() as f64 / 48_000.0;
-        match openai_compatible::transcribe(&path, &config) {
+        match openai_compatible::transcribe(&path, &config, &credentials) {
             Ok(mut transcript) => {
                 offset_segments(
                     &mut transcript.segments,
@@ -239,10 +272,11 @@ fn live_worker(
                         error: None,
                     },
                 )?;
-                println!("[{start_seconds:>8.2}s] {}", transcript.text.trim());
+                emit_chunk(output, chunk.index, start_seconds, &transcript.text)?;
                 completed.push(transcript);
             }
             Err(error) => {
+                let error = error.to_string();
                 write_checkpoint(
                     &mut checkpoints,
                     Checkpoint {
@@ -250,9 +284,10 @@ fn live_worker(
                         start_seconds,
                         status: "failed",
                         transcript: None,
-                        error: Some(error.to_string()),
+                        error: Some(error.clone()),
                     },
                 )?;
+                emit_failure(output, chunk.index, start_seconds, &error)?;
                 failed_chunks += 1;
             }
         }
@@ -261,6 +296,55 @@ fn live_worker(
         completed,
         failed_chunks,
     })
+}
+
+fn emit_chunk(output: Output, chunk_index: usize, start_seconds: f64, text: &str) -> Result<()> {
+    if output.is_json() {
+        output.event(&serde_json::json!({
+            "type": "transcription_chunk",
+            "chunk_index": chunk_index,
+            "start_seconds": start_seconds,
+            "text": text.trim(),
+        }))
+    } else {
+        output.line(&format!("[{start_seconds:>8.2}s] {}", text.trim()))
+    }
+}
+
+fn emit_failure(output: Output, chunk_index: usize, start_seconds: f64, error: &str) -> Result<()> {
+    if output.is_json() {
+        output.event(&serde_json::json!({
+            "type": "transcription_chunk_failed",
+            "chunk_index": chunk_index,
+            "start_seconds": start_seconds,
+            "error": error,
+        }))
+    } else {
+        output.status(
+            "Transcription failed",
+            &format!("chunk {chunk_index} at {start_seconds:.2}s: {error}"),
+        );
+        Ok(())
+    }
+}
+
+fn emit_completed(
+    output: Output,
+    transcript: &Transcript,
+    transcript_path: &Path,
+    print_text: bool,
+) -> Result<()> {
+    if output.is_json() {
+        output.event(&serde_json::json!({
+            "type": "transcription_completed",
+            "transcript_path": transcript_path,
+            "transcript": transcript,
+        }))
+    } else if print_text && !transcript.text.trim().is_empty() {
+        output.line(transcript.text.trim_end())
+    } else {
+        Ok(())
+    }
 }
 
 fn offset_segments(segments: &mut [TranscriptSegment], chunk_start: f64, chunk_duration: f64) {
@@ -301,23 +385,28 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn append_dropped_checkpoints(output_dir: &Path, dropped: &[(usize, usize)]) -> Result<usize> {
+fn append_dropped_checkpoints(
+    output_dir: &Path,
+    dropped: &[(usize, usize)],
+    output: Output,
+) -> Result<usize> {
     let mut checkpoints = OpenOptions::new()
         .append(true)
         .open(output_dir.join("transcript.jsonl"))?;
     for (chunk_index, start_sample) in dropped {
+        let start_seconds = *start_sample as f64 / 48_000.0;
+        let error = "upload queue was saturated; retranscribe audio.wav after recording";
         write_checkpoint(
             &mut checkpoints,
             Checkpoint {
                 chunk_index: *chunk_index,
-                start_seconds: *start_sample as f64 / 48_000.0,
+                start_seconds,
                 status: "failed",
                 transcript: None,
-                error: Some(
-                    "upload queue was saturated; retranscribe audio.wav after recording".into(),
-                ),
+                error: Some(error.into()),
             },
         )?;
+        emit_failure(output, *chunk_index, start_seconds, error)?;
     }
     Ok(dropped.len())
 }
@@ -364,6 +453,7 @@ mod tests {
         )
         .unwrap();
         let config = SttConfig {
+            api_style: crate::config::ApiStyle::OpenAiCompatible,
             base_url: "http://127.0.0.1:1".into(),
             transcription_path: "/audio/transcriptions".into(),
             model: "test".into(),
@@ -377,6 +467,7 @@ mod tests {
             Some(directory.path()),
             &config,
             false,
+            Output::new(false),
         )
         .unwrap_err();
         assert!(error.to_string().contains("pass --force"));

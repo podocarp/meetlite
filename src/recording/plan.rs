@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use crate::{cli::RecordArgs, config::RecordingConfig};
+use crate::{cli::CaptureArgs, config::RecordingConfig};
 
 use super::{MIC_GAIN, SAMPLE_RATE, SYSTEM_GAIN};
 
@@ -21,7 +21,7 @@ pub(super) struct SourcePlan {
 }
 
 impl RecordingPlan {
-    pub(super) fn from_args(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<Self> {
+    pub(super) fn from_args(args: CaptureArgs, config: Option<&RecordingConfig>) -> Result<Self> {
         if args.no_microphone && args.no_system_audio {
             bail!("at least one audio source must be enabled")
         }

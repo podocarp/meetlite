@@ -1,20 +1,21 @@
-use std::{env, fs, path::Path, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 use anyhow::{bail, Context, Result};
-use reqwest::{
-    blocking::{multipart, Client},
-    header::{HeaderName, HeaderValue, AUTHORIZATION},
-};
+use reqwest::blocking::{multipart, Client};
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::{Transcript, TranscriptSegment};
-use crate::config::{AuthConfig, SttConfig};
+use crate::{config::SttConfig, credentials::Credentials};
 
 const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-pub(crate) fn transcribe(input: &Path, config: &SttConfig) -> Result<Transcript> {
+pub(crate) fn transcribe(
+    input: &Path,
+    config: &SttConfig,
+    credentials: &Credentials,
+) -> Result<Transcript> {
     let metadata = fs::metadata(input)
         .with_context(|| format!("could not read input audio file {}", input.display()))?;
     if !metadata.is_file() {
@@ -48,19 +49,26 @@ pub(crate) fn transcribe(input: &Path, config: &SttConfig) -> Result<Transcript>
         config.base_url.trim_end_matches('/'),
         config.transcription_path
     );
-    let mut request = Client::builder()
+    let request = Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()
         .context("could not create transcription HTTP client")?
         .post(&endpoint)
         .multipart(form);
-    request = apply_auth(request, &config.auth)?;
+    let request = credentials.apply(request);
     let response = request
         .send()
         .with_context(|| format!("transcription request to {endpoint} failed"))?;
     let status = response.status();
     if !status.is_success() {
-        bail!("transcription request to {endpoint} failed with HTTP {status}")
+        let body = response
+            .text()
+            .context("could not read transcription provider error response")?;
+        let detail = truncate_error_body(body.trim(), 4096);
+        if detail.is_empty() {
+            bail!("transcription request to {endpoint} failed with HTTP {status}")
+        }
+        bail!("transcription request to {endpoint} failed with HTTP {status}: {detail}")
     }
     let raw_response: Value = response
         .json()
@@ -68,37 +76,14 @@ pub(crate) fn transcribe(input: &Path, config: &SttConfig) -> Result<Transcript>
     normalize(raw_response, config, input)
 }
 
-fn apply_auth(
-    mut request: reqwest::blocking::RequestBuilder,
-    auth: &AuthConfig,
-) -> Result<reqwest::blocking::RequestBuilder> {
-    match auth {
-        AuthConfig::None => {}
-        AuthConfig::Bearer { token_env } => {
-            let token = required_environment_value(token_env)?;
-            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-        AuthConfig::Header {
-            header_name,
-            value_env,
-        } => {
-            let name = HeaderName::from_bytes(header_name.as_bytes())
-                .context("configured authentication header name is invalid")?;
-            let value = HeaderValue::from_str(&required_environment_value(value_env)?)
-                .context("configured authentication header value is invalid")?;
-            request = request.header(name, value);
-        }
+fn truncate_error_body(body: &str, max_chars: usize) -> String {
+    let mut characters = body.chars();
+    let truncated: String = characters.by_ref().take(max_chars).collect();
+    if characters.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
     }
-    Ok(request)
-}
-
-fn required_environment_value(name: &str) -> Result<String> {
-    let value = env::var(name)
-        .with_context(|| format!("required environment variable {name} is not set"))?;
-    if value.is_empty() {
-        bail!("required environment variable {name} is empty")
-    }
-    Ok(value)
 }
 
 fn normalize(raw_response: Value, config: &SttConfig, input: &Path) -> Result<Transcript> {
@@ -157,13 +142,14 @@ mod tests {
 
     fn config(base_url: String) -> SttConfig {
         SttConfig {
+            api_style: crate::config::ApiStyle::OpenAiCompatible,
             base_url,
             transcription_path: "/audio/transcriptions".into(),
             model: "whisper-test".into(),
             language: Some("en".into()),
             response_format: "verbose_json".into(),
-            auth: AuthConfig::Bearer {
-                token_env: "MEETLITE_TEST_TOKEN".into(),
+            auth: AuthConfig::BearerPlain {
+                token: "test-token".into(),
             },
         }
     }
@@ -215,22 +201,66 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let input = temporary.path().join("sample.wav");
         fs::write(&input, b"RIFF test fixture").unwrap();
-        env::set_var("MEETLITE_TEST_TOKEN", "test-token");
-        let transcript = crate::transcription::transcribe_file(
+        let output = crate::transcription::transcribe_file(
             &input,
             Some(temporary.path()),
             &config(format!("http://{address}/v1")),
             false,
+            crate::output::Output::new(false),
         )
         .unwrap();
-        env::remove_var("MEETLITE_TEST_TOKEN");
         server.join().unwrap();
 
+        let transcript: Transcript =
+            serde_json::from_slice(&fs::read(&output.transcript_path).unwrap()).unwrap();
         assert_eq!(transcript.text, "hello world");
         assert_eq!(transcript.language.as_deref(), Some("en"));
         assert_eq!(transcript.segments.len(), 1);
         assert_eq!(transcript.segments[0].end_seconds, 1.25);
-        assert!(temporary.path().join("transcript.json").is_file());
+        assert!(output.transcript_path.is_file());
+    }
+
+    #[test]
+    fn includes_provider_error_body_in_http_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            loop {
+                let bytes_read = stream.read(&mut buffer).unwrap();
+                request.extend_from_slice(&buffer[..bytes_read]);
+                let Some(headers_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..headers_end]).to_ascii_lowercase();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+                if request.len() >= headers_end + 4 + content_length {
+                    break;
+                }
+            }
+            let body = r#"{"error":{"message":"response format is not implemented"}}"#;
+            write!(stream, "HTTP/1.1 501 Not Implemented\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+
+        let temporary = tempfile::tempdir().unwrap();
+        let input = temporary.path().join("sample.wav");
+        fs::write(&input, b"RIFF test fixture").unwrap();
+        let config = config(format!("http://{address}/v1"));
+        let credentials = Credentials::for_stt(&config.auth).unwrap();
+        let error = transcribe(&input, &config, &credentials).unwrap_err();
+        server.join().unwrap();
+
+        let message = error.to_string();
+        assert!(message.contains("501 Not Implemented"));
+        assert!(message.contains("response format is not implemented"));
     }
 
     #[test]

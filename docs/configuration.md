@@ -1,12 +1,20 @@
 # Configuration
 
 Meetlite reads JSON configuration from `~/.config/meetlite/config.json` by
-default.
+default. The configuration directory is created with `0700` permissions and the
+configuration file is written with `0600` permissions on Unix platforms.
 
 Create the file:
 
 ```bash
 meetlite config init
+```
+
+Configure transcription or summaries:
+
+```bash
+meetlite config setup stt
+meetlite config setup llm
 ```
 
 Print the active path:
@@ -17,10 +25,10 @@ meetlite config path
 
 Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
 
-## Minimal config
+## Default config
 
-Recording works without transcription or summary settings. The default config is
-enough for the tested macOS and Linux recording paths:
+Recording works out of the box. The default config also includes OpenAI-compatible
+STT and LLM examples so setup is discoverable:
 
 ```json
 {
@@ -31,8 +39,29 @@ enough for the tested macOS and Linux recording paths:
     "microphone_device": null,
     "system_device": null
   },
-  "stt": null,
-  "llm": null
+  "stt": {
+    "api_style": "openai-compatible",
+    "base_url": "https://api.openai.com/v1",
+    "transcription_path": "/audio/transcriptions",
+    "model": "whisper-1",
+    "language": null,
+    "response_format": "verbose_json",
+    "auth": {
+      "type": "bearer_plain",
+      "token": ""
+    }
+  },
+  "llm": {
+    "api_style": "openai-compatible",
+    "base_url": "https://api.openai.com/v1",
+    "chat_completions_path": "/chat/completions",
+    "model": "gpt-4o-mini",
+    "auth": {
+      "type": "bearer_plain",
+      "token": ""
+    },
+    "instructions": null
+  }
 }
 ```
 
@@ -60,64 +89,83 @@ device, for example `hw:Loopback,1,0` when audio is sent to `hw:Loopback,0,0`.
 
 ## Transcription settings
 
-`stt` is required only for `meetlite transcribe` or `meetlite record --transcribe`.
-It must point to an OpenAI-compatible multipart transcription endpoint.
+`stt` is required for `meetlite start`, `meetlite transcribe`, and live
+transcription through `meetlite record`. It must use a supported API style.
+Currently, Meetlite supports `openai-compatible` multipart transcription APIs.
 
 ```json
 {
   "stt": {
+    "api_style": "openai-compatible",
     "base_url": "https://stt.example.com/v1",
     "transcription_path": "/audio/transcriptions",
     "model": "whisper-large-v3",
     "language": "en",
     "response_format": "verbose_json",
     "auth": {
-      "type": "bearer",
-      "token_env": "MEETLITE_STT_API_KEY"
+      "type": "bearer_keyring",
+      "service": "Meetlite",
+      "user": "Meetlite STT API Key"
     }
   }
 }
 ```
 
-`base_url` must start with `http://` or `https://`. `transcription_path` defaults
-to `/audio/transcriptions`, and `response_format` defaults to `verbose_json`.
+`api_style` defaults to `openai-compatible`. `base_url` must start with `http://` or `https://`. `transcription_path` defaults to `/audio/transcriptions`, and `response_format` defaults to `verbose_json`.
 
 ## Summary settings
 
-`llm` is required only for `meetlite summarize` or `meetlite record --summarize`.
-It uses an OpenAI-compatible chat-completions endpoint.
+`llm` is required for `meetlite start`, `meetlite summarize`, and
+`meetlite record --summarize`. It uses a supported API style. Currently,
+Meetlite supports streaming `openai-compatible` chat-completions APIs.
 
 ```json
 {
   "llm": {
+    "api_style": "openai-compatible",
     "base_url": "https://llm.example.com/v1",
     "chat_completions_path": "/chat/completions",
     "model": "gpt-4o-mini",
     "auth": {
-      "type": "bearer",
-      "token_env": "MEETLITE_LLM_API_KEY"
+      "type": "bearer_keyring",
+      "service": "Meetlite",
+      "user": "Meetlite LLM API Key"
     },
     "instructions": "Correct Acme to Acme Corp and use the spelling Nia Chen."
   }
 }
 ```
 
-`chat_completions_path` defaults to `/chat/completions`. `instructions` is
-optional text sent with every summary request for names, terminology, and other
-corrections.
+`api_style` defaults to `openai-compatible`. `chat_completions_path` defaults to `/chat/completions`. `instructions` is optional text sent with every summary request for names, terminology, and other corrections.
 
 ## Authentication
 
-Do not place API keys directly in the configuration file. Reference environment
-variables instead.
+`meetlite config setup stt` and `meetlite config setup llm` try to store API keys
+in the OS keyring. If the keyring is unavailable, Meetlite stores the key in the
+private configuration file. On macOS, choose Allow or Always Allow if Keychain
+prompts for access. Meetlite resolves STT credentials before recording starts
+and reuses the result for every live-transcription request. `MEETLITE_STT_API_KEY`
+and `MEETLITE_LLM_API_KEY` override configured bearer tokens when set.
 
-Bearer token:
+OS keyring bearer token:
+
+```json
+"auth": { "type": "bearer_keyring", "service": "Meetlite", "user": "Meetlite STT API Key" }
+```
+
+Plain config bearer token:
+
+```json
+"auth": { "type": "bearer_plain", "token": "sk-..." }
+```
+
+Environment bearer token:
 
 ```json
 "auth": { "type": "bearer", "token_env": "MEETLITE_STT_API_KEY" }
 ```
 
-Custom header:
+Custom header from environment:
 
 ```json
 "auth": {
@@ -140,6 +188,7 @@ For a local `whisper-server`, configure its native endpoint:
 ```json
 {
   "stt": {
+    "api_style": "openai-compatible",
     "base_url": "http://127.0.0.1:8080",
     "transcription_path": "/inference",
     "model": "local-whisper-cpp",

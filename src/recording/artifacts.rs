@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use super::CaptureStatistics;
 
@@ -102,7 +103,7 @@ pub(super) fn unix_time_ms() -> u128 {
 pub(super) fn output_dir(configured: Option<&Path>, force: bool) -> Result<PathBuf> {
     let path = match configured {
         Some(path) => path.to_path_buf(),
-        None => PathBuf::from(format!("meetlite-{}", unix_time_ms())),
+        None => PathBuf::from(format!("meetlite-{}", recording_timestamp()?)),
     };
     if path.exists() {
         if !force {
@@ -135,6 +136,13 @@ pub(super) fn output_dir(configured: Option<&Path>, force: bool) -> Result<PathB
             .with_context(|| format!("could not create output directory {}", path.display()))?;
     }
     Ok(path)
+}
+
+fn recording_timestamp() -> Result<String> {
+    let timestamp = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .context("could not format recording timestamp")?;
+    Ok(timestamp.replace(':', "-"))
 }
 
 pub(super) fn audio_file_name() -> &'static str {

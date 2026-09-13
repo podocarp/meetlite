@@ -9,6 +9,8 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 
+use crate::output::Output;
+
 use super::{
     adapter::{BoxedCaptureAdapter, CaptureAdapterFactory},
     artifacts::{
@@ -99,8 +101,13 @@ where
         let mut writer = hound::WavWriter::create(artifacts.audio_file(), specification)
             .with_context(|| format!("could not create {}", artifacts.audio_file().display()))?;
 
-        println!("Recording to {}", artifacts.audio_file().display());
-        println!("Press Ctrl-C to stop.");
+        let terminal = Output::new(false);
+        terminal.status(
+            "Recording",
+            &format!("to {}", artifacts.audio_file().display()),
+        );
+        terminal.instruction("Press Ctrl-C to stop.");
+        terminal.blank_line();
         let sample_limit = self.plan.sample_limit();
         while !stop.load(Ordering::Acquire)
             && self
@@ -143,7 +150,6 @@ where
                 system_stats,
             ),
         })?;
-        println!("Saved {}", artifacts.audio_file().display());
         Ok(output)
     }
 

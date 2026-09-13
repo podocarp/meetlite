@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::{cli::RecordArgs, config::RecordingConfig};
+use crate::{cli::CaptureArgs, config::RecordingConfig, output::Output};
 use adapter::BoxedCaptureAdapter;
 use adapter::PlatformCaptureAdapterFactory;
 pub use artifacts::RecordingOutput;
@@ -290,12 +290,17 @@ impl Mixer {
     }
 }
 
-pub fn record(args: RecordArgs, config: Option<&RecordingConfig>) -> Result<()> {
-    record_with_samples(args, config, |_| {}, |_| {}).map(|_| ())
+pub fn record(args: CaptureArgs, config: Option<&RecordingConfig>) -> Result<()> {
+    let recording = record_with_samples(args, config, |_| {}, |_| {})?;
+    Output::new(false).status(
+        "Saved recording",
+        &recording.audio_file.display().to_string(),
+    );
+    Ok(())
 }
 
 pub fn record_with_samples(
-    args: RecordArgs,
+    args: CaptureArgs,
     config: Option<&RecordingConfig>,
     on_started: impl FnOnce(&RecordingOutput),
     on_samples: impl FnMut(&[i16]),

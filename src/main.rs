@@ -1,5 +1,7 @@
 mod cli;
 mod config;
+mod credentials;
+mod output;
 mod pipeline;
 mod recording;
 #[cfg(target_os = "macos")]

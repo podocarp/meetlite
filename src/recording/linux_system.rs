@@ -26,7 +26,7 @@ impl SystemAudioCapture {
     pub fn start(alsa_device: Option<&str>) -> Result<Self> {
         match PulseAudioCapture::start() {
             Ok(capture) => {
-                println!("Capturing system audio from the default PulseAudio monitor.");
+                eprintln!("Capturing system audio from the default PulseAudio monitor.");
                 Ok(Self::PulseAudio(capture))
             }
             Err(pulse_error) => {
@@ -36,7 +36,7 @@ impl SystemAudioCapture {
                 AlsaSystemAudioCapture::start(device)
                     .with_context(|| format!("PulseAudio monitor capture failed: {pulse_error}"))
                     .map(|capture| {
-                        println!("PulseAudio is unavailable; capturing system audio from ALSA device {device}.");
+                        eprintln!("PulseAudio is unavailable; capturing system audio from ALSA device {device}.");
                         Self::Alsa(capture)
                     })
             }

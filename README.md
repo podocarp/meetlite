@@ -84,11 +84,12 @@ Core commands:
 
 ```bash
 meetlite devices # list microphones
-meetlite record  # records only.
-meetlite record --transcribe # records with live transcription.
-meetlite record --summarize  # records, live-transcribes, then writes summary.md.
+meetlite start   # records, live-transcribes, then streams and saves a summary
+meetlite record  # records only
+meetlite record --transcribe # records with live transcription
+meetlite record --summarize  # alternate entry point for the start pipeline
 meetlite transcribe <AUDIO_FILE> # transcribe an existing recording
-meetlite summarize <TRANSCRIPT>  # summarize an existing transcript
+meetlite summarize <TRANSCRIPT>  # stream and save a summary
 ```
 
 Of course you can pass `--help` to any of them to get a list of flags and
@@ -140,8 +141,9 @@ Record and transcribe live:
 ./meetlite record --transcribe --duration 60 --output ./live-sync
 ```
 
-Live transcription preserves `audio.wav`, writes progress to `transcript.jsonl`,
-and writes the completed result to `transcript.json`.
+Live transcription streams completed 15-second transcript chunks to the terminal,
+preserves `audio.wav`, writes progress to `transcript.jsonl`, and writes the
+completed result to `transcript.json`.
 
 Meetlite refuses to replace an existing output directory or generated transcript
 by default. Use `--force` to replace Meetlite artifacts in a specified recording
@@ -181,17 +183,21 @@ export MEETLITE_LLM_API_KEY='...'
 ./meetlite summarize ./team-sync/transcript.json
 ```
 
-Meetlite refuses to replace an existing `summary.md`; use `--force` to rewrite
-it.
+Summary Markdown is streamed to the terminal while it is generated and saved as
+`summary.md`. Meetlite refuses to replace an existing summary; use `--force` to
+rewrite it.
 
 Use `llm.instructions` for names, terminology, and other transcription
 corrections before the model creates the Markdown summary.
 
-To run the full recording pipeline, including the final summary:
+To run the full recording pipeline, including live transcription and the final
+streamed summary:
 
 ```bash
-./meetlite record --summarize --duration 60 --output ./team-sync
+./meetlite start --duration 60 --output ./team-sync
 ```
+
+Use global `--json` for newline-delimited JSON progress events.
 
 ## More references/docs
 
