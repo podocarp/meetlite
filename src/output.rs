@@ -47,7 +47,7 @@ impl Output {
 
     pub fn instruction(self, value: &str) {
         if !self.json {
-            eprintln!("{}", style(value, "2"));
+            println!("{}", style(value, "2"));
         }
     }
 

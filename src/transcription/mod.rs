@@ -3,9 +3,10 @@ mod openai_compatible;
 use std::{
     fs,
     fs::OpenOptions,
-    io::Write,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
     thread,
+    time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
@@ -16,12 +17,20 @@ use crate::{
     cli::CaptureArgs,
     config::{RecordingConfig, SttConfig},
     credentials::Credentials,
+    live_control::LiveControl,
     output::Output,
     recording::{self, RecordingOutput},
 };
 
 const TRANSCRIPT_FILE: &str = "transcript.json";
-const LIVE_CHUNK_SAMPLES: usize = 15 * 48_000;
+const SAMPLE_RATE: usize = 48_000;
+const LIVE_CHUNK_SAMPLES: usize = 15 * SAMPLE_RATE;
+const OFFLINE_CHUNK_SAMPLES: usize = 30 * SAMPLE_RATE;
+const MAX_CHUNK_DELAY_SAMPLES: usize = 5 * SAMPLE_RATE;
+const SILENCE_WINDOW_SAMPLES: usize = 960;
+const MIN_SILENCE_WINDOWS: usize = 15;
+const QUIET_RMS: f64 = 0.01;
+const ROLLING_PROMPT_CHARS: usize = 800;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transcript {
@@ -68,10 +77,100 @@ pub fn transcribe_file(
         )
     }
     let credentials = Credentials::for_stt(&config.auth)?;
-    let transcript = openai_compatible::transcribe(input, config, &credentials)?;
+    let transcript = transcribe_offline(input, config, &credentials)?;
     write_json(&transcript_path, &transcript)?;
     emit_completed(output, &transcript, &transcript_path, true)?;
     Ok(TranscriptionOutput { transcript_path })
+}
+
+fn transcribe_offline(
+    input: &Path,
+    config: &SttConfig,
+    credentials: &Credentials,
+) -> Result<Transcript> {
+    let Some(samples) = read_meetlite_wav(input) else {
+        return openai_compatible::transcribe(input, config, credentials, config.prompt.as_deref());
+    };
+    if samples.len() <= OFFLINE_CHUNK_SAMPLES {
+        return openai_compatible::transcribe(input, config, credentials, config.prompt.as_deref());
+    }
+
+    let chunks = tempfile::tempdir().context("could not create temporary transcription chunks")?;
+    let mut completed = Vec::new();
+    let mut history = String::new();
+    let mut start_sample = 0;
+    let mut index = 0;
+    while start_sample < samples.len() {
+        let remaining = &samples[start_sample..];
+        let length = silence_aware_boundary(
+            remaining,
+            OFFLINE_CHUNK_SAMPLES,
+            OFFLINE_CHUNK_SAMPLES + MAX_CHUNK_DELAY_SAMPLES,
+        )
+        .unwrap_or(remaining.len());
+        let path = chunks.path().join(format!("chunk-{index:06}.wav"));
+        write_chunk(&path, &remaining[..length])?;
+        let prompt = transcription_prompt(config, &history);
+        let mut transcript =
+            openai_compatible::transcribe(&path, config, credentials, prompt.as_deref())?;
+        offset_segments(
+            &mut transcript.segments,
+            start_sample as f64 / SAMPLE_RATE as f64,
+            length as f64 / SAMPLE_RATE as f64,
+        );
+        append_history(&mut history, &transcript.text);
+        completed.push(transcript);
+        start_sample += length;
+        index += 1;
+    }
+    Ok(merge_transcripts(completed, input))
+}
+
+fn read_meetlite_wav(input: &Path) -> Option<Vec<i16>> {
+    let reader = hound::WavReader::open(input).ok()?;
+    let spec = reader.spec();
+    if spec.channels != 1
+        || spec.sample_rate != SAMPLE_RATE as u32
+        || spec.bits_per_sample != 16
+        || spec.sample_format != hound::SampleFormat::Int
+    {
+        return None;
+    }
+    reader
+        .into_samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+}
+
+fn transcription_prompt(config: &SttConfig, history: &str) -> Option<String> {
+    let static_prompt = config
+        .prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty());
+    let history = history.trim();
+    match (static_prompt, history.is_empty()) {
+        (None, true) => None,
+        (Some(prompt), true) => Some(prompt.to_owned()),
+        (None, false) => Some(history.to_owned()),
+        (Some(prompt), false) => Some(format!("{prompt}\n\n{history}")),
+    }
+}
+
+fn append_history(history: &mut String, text: &str) {
+    if !history.is_empty() {
+        history.push(' ');
+    }
+    history.push_str(text.trim());
+    if history.chars().count() > ROLLING_PROMPT_CHARS {
+        *history = history
+            .chars()
+            .rev()
+            .take(ROLLING_PROMPT_CHARS)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+    }
 }
 
 pub fn transcribe_live(
@@ -79,19 +178,31 @@ pub fn transcribe_live(
     recording_config: Option<&RecordingConfig>,
     stt: SttConfig,
     output: Output,
+    control: LiveControl,
 ) -> Result<TranscriptionOutput> {
     // Resolve credentials before capture so Keychain prompts never arrive mid-recording.
     let credentials = Credentials::for_stt(&stt.auth)?;
     let (sender, receiver) = bounded(4);
     let (started_sender, started_receiver) = bounded(1);
+    let (result_sender, result_receiver) = bounded(1);
     let worker_output = output;
+    let worker_control = control.clone();
     let worker = thread::spawn(move || {
-        live_worker(receiver, started_receiver, stt, credentials, worker_output)
+        let result = live_worker(
+            receiver,
+            started_receiver,
+            stt,
+            credentials,
+            worker_output,
+            worker_control,
+        );
+        let _ = result_sender.send(result);
     });
     let mut chunker = Chunker::new(sender);
     let recording_result = recording::record_with_samples(
         args,
         recording_config,
+        Some(control.clone()),
         |output| {
             let _ = started_sender.send(output.clone());
         },
@@ -101,11 +212,36 @@ pub fn transcribe_live(
     chunker.finish();
     let dropped_chunks = std::mem::take(&mut chunker.dropped_chunks);
     drop(chunker);
-    let worker_result = worker
-        .join()
-        .map_err(|_| anyhow::anyhow!("live transcription worker panicked"))?;
     let recording = recording_result?;
-    let worker_result = worker_result?;
+    control.begin_transcription();
+    if !control.transcription_stopped() {
+        output.instruction(
+            "Draining transcription queue. Press Ctrl-C to stop transcribing. Press Ctrl-D to quit immediately.",
+        );
+    }
+    let worker_result = loop {
+        if control.transcription_stopped() {
+            output.instruction("Transcription stopped.");
+            break WorkerResult::from_checkpoints(&recording.output_dir)?;
+        }
+        match result_receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(result) => {
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("live transcription worker panicked"))?;
+                break result?;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("live transcription worker panicked"))?;
+                return Err(anyhow::anyhow!(
+                    "live transcription worker exited without a result"
+                ));
+            }
+        }
+    };
     let dropped_failures =
         append_dropped_checkpoints(&recording.output_dir, &dropped_chunks, output)?;
     finalize_metadata(&recording.output_dir, &worker_result, dropped_failures)?;
@@ -150,8 +286,12 @@ impl Chunker {
     }
     fn push(&mut self, samples: &[i16]) {
         self.samples.extend_from_slice(samples);
-        while self.samples.len() >= LIVE_CHUNK_SAMPLES {
-            let chunk = self.samples.drain(..LIVE_CHUNK_SAMPLES).collect();
+        while let Some(length) = silence_aware_boundary(
+            &self.samples,
+            LIVE_CHUNK_SAMPLES,
+            LIVE_CHUNK_SAMPLES + MAX_CHUNK_DELAY_SAMPLES,
+        ) {
+            let chunk = self.samples.drain(..length).collect();
             self.send(chunk);
         }
     }
@@ -177,11 +317,11 @@ impl Chunker {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Checkpoint {
     chunk_index: usize,
     start_seconds: f64,
-    status: &'static str,
+    status: String,
     transcript: Option<Transcript>,
     error: Option<String>,
 }
@@ -192,44 +332,94 @@ struct WorkerResult {
 }
 
 impl WorkerResult {
-    fn final_transcript(&self, source: &Path) -> Transcript {
-        let text = self
-            .completed
+    fn from_checkpoints(output_dir: &Path) -> Result<Self> {
+        let path = output_dir.join("transcript.jsonl");
+        let reader =
+            fs::File::open(&path).with_context(|| format!("could not read {}", path.display()))?;
+        let checkpoints = std::io::BufReader::new(reader)
+            .lines()
+            .map(|line| -> Result<Checkpoint> { Ok(serde_json::from_str(&line?)?) })
+            .collect::<Result<Vec<_>>>()?;
+        let completed = checkpoints
             .iter()
-            .map(|item| item.text.trim())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let segments = self
-            .completed
-            .iter()
-            .flat_map(|item| item.segments.clone())
+            .filter_map(|checkpoint| checkpoint.transcript.clone())
             .collect();
-        let raw_response = serde_json::Value::Array(
-            self.completed
-                .iter()
-                .map(|item| item.raw_response.clone())
-                .collect(),
-        );
-        Transcript {
-            schema_version: 1,
-            text,
-            language: None,
-            duration_seconds: None,
-            segments,
-            provider: self
-                .completed
-                .first()
-                .map(|item| item.provider.clone())
-                .unwrap_or_default(),
-            model: self
-                .completed
-                .first()
-                .map(|item| item.model.clone())
-                .unwrap_or_default(),
-            source_path: source.display().to_string(),
-            raw_response,
-        }
+        let failed_chunks = checkpoints
+            .iter()
+            .filter(|checkpoint| checkpoint.status == "failed")
+            .count();
+        Ok(Self {
+            completed,
+            failed_chunks,
+        })
     }
+
+    fn final_transcript(&self, source: &Path) -> Transcript {
+        merge_transcripts(self.completed.clone(), source)
+    }
+}
+
+fn merge_transcripts(completed: Vec<Transcript>, source: &Path) -> Transcript {
+    let text = completed
+        .iter()
+        .map(|item| item.text.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let segments = completed
+        .iter()
+        .flat_map(|item| item.segments.clone())
+        .collect();
+    let raw_response = serde_json::Value::Array(
+        completed
+            .iter()
+            .map(|item| item.raw_response.clone())
+            .collect(),
+    );
+    Transcript {
+        schema_version: 1,
+        text,
+        language: completed.first().and_then(|item| item.language.clone()),
+        duration_seconds: None,
+        segments,
+        provider: completed
+            .first()
+            .map(|item| item.provider.clone())
+            .unwrap_or_default(),
+        model: completed
+            .first()
+            .map(|item| item.model.clone())
+            .unwrap_or_default(),
+        source_path: source.display().to_string(),
+        raw_response,
+    }
+}
+
+fn silence_aware_boundary(samples: &[i16], target: usize, maximum: usize) -> Option<usize> {
+    let available = samples.len().min(maximum);
+    if available < target {
+        return None;
+    }
+    let mut start = target;
+    while start + MIN_SILENCE_WINDOWS * SILENCE_WINDOW_SAMPLES <= available {
+        let end = start + MIN_SILENCE_WINDOWS * SILENCE_WINDOW_SAMPLES;
+        if samples[start..end]
+            .chunks_exact(SILENCE_WINDOW_SAMPLES)
+            .all(is_quiet)
+        {
+            return Some(start);
+        }
+        start += SILENCE_WINDOW_SAMPLES;
+    }
+    (samples.len() >= maximum).then_some(maximum)
+}
+
+fn is_quiet(samples: &[i16]) -> bool {
+    let mean_square = samples
+        .iter()
+        .map(|sample| (*sample as f64 / i16::MAX as f64).powi(2))
+        .sum::<f64>()
+        / samples.len() as f64;
+    mean_square.sqrt() <= QUIET_RMS
 }
 
 fn live_worker(
@@ -238,6 +428,7 @@ fn live_worker(
     config: SttConfig,
     credentials: Credentials,
     output: Output,
+    control: LiveControl,
 ) -> Result<WorkerResult> {
     let recording = started
         .recv()
@@ -249,13 +440,24 @@ fn live_worker(
         .append(true)
         .open(recording.output_dir.join("transcript.jsonl"))?;
     let mut completed = Vec::new();
+    let mut history = String::new();
     let mut failed_chunks = 0;
     while let Ok(chunk) = receiver.recv() {
+        if control.transcription_stopped() {
+            break;
+        }
         let path = chunks.join(format!("chunk-{:06}.wav", chunk.index));
         write_chunk(&path, &chunk.samples)?;
         let start_seconds = chunk.start_sample as f64 / 48_000.0;
         let chunk_duration_seconds = chunk.samples.len() as f64 / 48_000.0;
-        match openai_compatible::transcribe(&path, &config, &credentials) {
+        let prompt = transcription_prompt(&config, &history);
+        let transcription =
+            openai_compatible::transcribe(&path, &config, &credentials, prompt.as_deref());
+        // Do not let a request that was abandoned during its response race the final transcript.
+        if control.transcription_stopped() {
+            break;
+        }
+        match transcription {
             Ok(mut transcript) => {
                 offset_segments(
                     &mut transcript.segments,
@@ -267,12 +469,13 @@ fn live_worker(
                     Checkpoint {
                         chunk_index: chunk.index,
                         start_seconds,
-                        status: "completed",
+                        status: "completed".into(),
                         transcript: Some(transcript.clone()),
                         error: None,
                     },
                 )?;
                 emit_chunk(output, chunk.index, start_seconds, &transcript.text)?;
+                append_history(&mut history, &transcript.text);
                 completed.push(transcript);
             }
             Err(error) => {
@@ -282,7 +485,7 @@ fn live_worker(
                     Checkpoint {
                         chunk_index: chunk.index,
                         start_seconds,
-                        status: "failed",
+                        status: "failed".into(),
                         transcript: None,
                         error: Some(error.clone()),
                     },
@@ -401,7 +604,7 @@ fn append_dropped_checkpoints(
             Checkpoint {
                 chunk_index: *chunk_index,
                 start_seconds,
-                status: "failed",
+                status: "failed".into(),
                 transcript: None,
                 error: Some(error.into()),
             },
@@ -445,6 +648,91 @@ mod tests {
     }
 
     #[test]
+    fn prefers_a_silent_boundary_after_the_target_duration() {
+        let target = 10 * SILENCE_WINDOW_SAMPLES;
+        let mut samples = vec![i16::MAX; target];
+        samples.extend(std::iter::repeat_n(
+            0,
+            MIN_SILENCE_WINDOWS * SILENCE_WINDOW_SAMPLES,
+        ));
+
+        assert_eq!(
+            silence_aware_boundary(&samples, target, target + 20 * SILENCE_WINDOW_SAMPLES),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn waits_for_the_maximum_duration_before_forcing_a_boundary() {
+        let target = 10 * SILENCE_WINDOW_SAMPLES;
+        let maximum = target + 5 * SILENCE_WINDOW_SAMPLES;
+        let samples = vec![i16::MAX; maximum - 1];
+        assert_eq!(silence_aware_boundary(&samples, target, maximum), None);
+
+        let samples = vec![i16::MAX; maximum];
+        assert_eq!(
+            silence_aware_boundary(&samples, target, maximum),
+            Some(maximum)
+        );
+    }
+
+    #[test]
+    fn live_chunks_are_contiguous_without_overlap() {
+        let (sender, receiver) = bounded(4);
+        let mut chunker = Chunker::new(sender);
+        let samples = vec![i16::MAX; LIVE_CHUNK_SAMPLES * 3];
+
+        chunker.push(&samples);
+        chunker.finish();
+        drop(chunker);
+
+        let chunks = receiver.try_iter().collect::<Vec<_>>();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].start_sample, 0);
+        assert_eq!(
+            chunks[0].samples.len(),
+            LIVE_CHUNK_SAMPLES + MAX_CHUNK_DELAY_SAMPLES
+        );
+        assert_eq!(chunks[1].start_sample, chunks[0].samples.len());
+        assert_eq!(
+            chunks[1].samples.len(),
+            LIVE_CHUNK_SAMPLES + MAX_CHUNK_DELAY_SAMPLES
+        );
+        assert_eq!(
+            chunks[2].start_sample,
+            chunks[0].samples.len() + chunks[1].samples.len()
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.samples.len())
+                .sum::<usize>(),
+            samples.len()
+        );
+    }
+
+    #[test]
+    fn rolling_prompt_combines_the_static_hint_and_completed_transcript() {
+        let config = SttConfig {
+            api_style: crate::config::ApiStyle::OpenAiCompatible,
+            base_url: "http://127.0.0.1".into(),
+            transcription_path: "/audio/transcriptions".into(),
+            model: "test".into(),
+            language: None,
+            prompt: Some("Meetlite, PostgreSQL".into()),
+            response_format: "verbose_json".into(),
+            auth: AuthConfig::None,
+        };
+        let mut history = String::new();
+        append_history(&mut history, "The Meetlite project uses PostgreSQL.");
+
+        assert_eq!(
+            transcription_prompt(&config, &history).as_deref(),
+            Some("Meetlite, PostgreSQL\n\nThe Meetlite project uses PostgreSQL.")
+        );
+    }
+
+    #[test]
     fn refuses_to_overwrite_transcript_without_force() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(
@@ -458,6 +746,7 @@ mod tests {
             transcription_path: "/audio/transcriptions".into(),
             model: "test".into(),
             language: None,
+            prompt: None,
             response_format: "verbose_json".into(),
             auth: AuthConfig::None,
         };

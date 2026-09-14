@@ -45,6 +45,7 @@ STT and LLM examples so setup is discoverable:
     "transcription_path": "/audio/transcriptions",
     "model": "whisper-1",
     "language": null,
+    "prompt": null,
     "response_format": "verbose_json",
     "auth": {
       "type": "bearer_plain",
@@ -101,6 +102,7 @@ Currently, Meetlite supports `openai-compatible` multipart transcription APIs.
     "transcription_path": "/audio/transcriptions",
     "model": "whisper-large-v3",
     "language": "en",
+    "prompt": "Meetlite, Acme Corp, PostgreSQL.",
     "response_format": "verbose_json",
     "auth": {
       "type": "bearer_keyring",
@@ -111,7 +113,7 @@ Currently, Meetlite supports `openai-compatible` multipart transcription APIs.
 }
 ```
 
-`api_style` defaults to `openai-compatible`. `base_url` must start with `http://` or `https://`. `transcription_path` defaults to `/audio/transcriptions`, and `response_format` defaults to `verbose_json`.
+`api_style` defaults to `openai-compatible`. `base_url` must start with `http://` or `https://`. `transcription_path` defaults to `/audio/transcriptions`, and `response_format` defaults to `verbose_json`. `prompt` is an optional Whisper-style transcription hint for terminology and style. During chunked transcription, Meetlite adds the recent completed transcript after this hint for continuity; providers may enforce their own prompt-token limit.
 
 ## Summary settings
 

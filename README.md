@@ -120,6 +120,7 @@ example, use an API key kept in an environment variable:
     "base_url": "https://stt.example.com/v1",
     "model": "whisper-large-v3",
     "language": "en",
+    "prompt": "Meetlite, Acme Corp, PostgreSQL.",
     "auth": {
       "type": "bearer",
       "token_env": "MEETLITE_STT_API_KEY"

@@ -15,6 +15,7 @@ pub(crate) fn transcribe(
     input: &Path,
     config: &SttConfig,
     credentials: &Credentials,
+    prompt: Option<&str>,
 ) -> Result<Transcript> {
     let metadata = fs::metadata(input)
         .with_context(|| format!("could not read input audio file {}", input.display()))?;
@@ -42,6 +43,9 @@ pub(crate) fn transcribe(
         .text("response_format", config.response_format.clone());
     if let Some(language) = config.language.as_deref() {
         form = form.text("language", language.to_owned());
+    }
+    if let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) {
+        form = form.text("prompt", prompt.to_owned());
     }
 
     let endpoint = format!(
@@ -147,6 +151,7 @@ mod tests {
             transcription_path: "/audio/transcriptions".into(),
             model: "whisper-test".into(),
             language: Some("en".into()),
+            prompt: Some("Meetlite, Kubernetes".into()),
             response_format: "verbose_json".into(),
             auth: AuthConfig::BearerPlain {
                 token: "test-token".into(),
@@ -187,6 +192,8 @@ mod tests {
             assert!(request.contains("name=\"model\""));
             assert!(request.contains("whisper-test"));
             assert!(request.contains("name=\"language\""));
+            assert!(request.contains("name=\"prompt\""));
+            assert!(request.contains("meetlite, kubernetes"));
             assert!(request.contains("name=\"file\"; filename=\"sample.wav\""));
             let body = r#"{"text":"hello world","language":"en","duration":1.25,"segments":[{"start":0.0,"end":1.25,"text":"hello world"}]}"#;
             write!(
@@ -255,7 +262,7 @@ mod tests {
         fs::write(&input, b"RIFF test fixture").unwrap();
         let config = config(format!("http://{address}/v1"));
         let credentials = Credentials::for_stt(&config.auth).unwrap();
-        let error = transcribe(&input, &config, &credentials).unwrap_err();
+        let error = transcribe(&input, &config, &credentials, None).unwrap_err();
         server.join().unwrap();
 
         let message = error.to_string();

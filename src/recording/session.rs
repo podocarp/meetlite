@@ -1,15 +1,11 @@
 use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
 
-use crate::output::Output;
+use crate::{live_control::LiveControl, output::Output};
 
 use super::{
     adapter::{BoxedCaptureAdapter, CaptureAdapterFactory},
@@ -61,6 +57,7 @@ pub(super) struct RecordingSession<'a, F, S> {
     plan: RecordingPlan,
     factory: &'a F,
     sink: S,
+    control: Option<LiveControl>,
 }
 
 impl<'a, F, S> RecordingSession<'a, F, S>
@@ -68,11 +65,17 @@ where
     F: CaptureAdapterFactory,
     S: RecordingSink,
 {
-    pub(super) fn new(plan: RecordingPlan, factory: &'a F, sink: S) -> Self {
+    pub(super) fn new(
+        plan: RecordingPlan,
+        factory: &'a F,
+        sink: S,
+        control: Option<LiveControl>,
+    ) -> Self {
         Self {
             plan,
             factory,
             sink,
+            control,
         }
     }
 
@@ -80,11 +83,6 @@ where
         let artifacts = RecordingArtifacts::prepare(self.plan.output.as_deref(), self.plan.force)?;
         let output = artifacts.output();
         self.sink.recording_started(&output);
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let signal_stop = Arc::clone(&stop);
-        ctrlc::set_handler(move || signal_stop.store(true, Ordering::Release))
-            .context("could not install Ctrl-C handler")?;
 
         let mut microphone = self.start_microphone()?;
         let mut system = self.start_system()?;
@@ -106,10 +104,13 @@ where
             "Recording",
             &format!("to {}", artifacts.audio_file().display()),
         );
-        terminal.instruction("Press Ctrl-C to stop.");
+        terminal.instruction("Press Ctrl-C to stop recording. Press Ctrl-D to quit immediately.");
         terminal.blank_line();
         let sample_limit = self.plan.sample_limit();
-        while !stop.load(Ordering::Acquire)
+        while !self
+            .control
+            .as_ref()
+            .is_some_and(LiveControl::recording_stopped)
             && self
                 .plan
                 .duration_seconds

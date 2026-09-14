@@ -163,6 +163,10 @@ pub struct ConfigSetupArgs {
     #[arg(long)]
     pub language: Option<String>,
 
+    /// STT prompt for terminology and transcription style.
+    #[arg(long)]
+    pub prompt: Option<String>,
+
     /// STT response format.
     #[arg(long)]
     pub response_format: Option<String>,

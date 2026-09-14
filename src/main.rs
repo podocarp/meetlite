@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod credentials;
+mod live_control;
 mod output;
 mod pipeline;
 mod recording;

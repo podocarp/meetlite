@@ -92,12 +92,12 @@ fn request_summary(
         config.base_url.trim_end_matches('/'),
         config.chat_completions_path
     );
-    let corrections = config.instructions.as_deref().unwrap_or("None.");
+    let instructions = config.instructions.as_deref().unwrap_or_default();
     let body = json!({
         "model": config.model,
         "messages": [
-            {"role": "system", "content": format!("You summarize meeting transcripts. Correct obvious transcription errors using the provided instructions, but do not invent facts. Return Markdown only using this template:\n\n{SUMMARY_TEMPLATE}")},
-            {"role": "user", "content": format!("Correction instructions:\n{corrections}\n\nTranscript:\n{transcript}")}
+            {"role": "system", "content": format!("You summarize meeting transcripts. Correct obvious transcription errors, but do not invent facts. Return Markdown only using this template:\n\n{SUMMARY_TEMPLATE}")},
+            {"role": "user", "content": format!("{instructions}\n\nTranscript:\n{transcript}")}
         ],
         "stream": true
     });

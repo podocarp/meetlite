@@ -70,6 +70,7 @@ pub struct SttConfig {
     pub transcription_path: String,
     pub model: String,
     pub language: Option<String>,
+    pub prompt: Option<String>,
     #[serde(default = "default_response_format")]
     pub response_format: String,
     pub auth: AuthConfig,
@@ -264,6 +265,7 @@ pub fn default_stt_config() -> SttConfig {
         transcription_path: default_transcription_path(),
         model: "whisper-1".into(),
         language: None,
+        prompt: None,
         response_format: default_response_format(),
         auth: AuthConfig::BearerPlain {
             token: String::new(),
@@ -661,6 +663,7 @@ mod tests {
                 transcription_path: default_transcription_path(),
                 model: "whisper-test".into(),
                 language: None,
+                prompt: None,
                 response_format: default_response_format(),
                 auth,
             }),

@@ -1,10 +1,13 @@
 use std::{
     io::{self, Write},
     path::Path,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait};
+use crossbeam_channel::bounded;
 
 use crate::{
     cli::{
@@ -16,6 +19,7 @@ use crate::{
         LLM_API_KEY_ENV, STT_API_KEY_ENV,
     },
     credentials::Credentials,
+    live_control::LiveControl,
     output::Output,
     recording, summary, transcription,
 };
@@ -80,6 +84,7 @@ fn run_live_pipeline(
     let force = args.force;
     let config = Config::load(config_path)?;
     let stt = config.stt()?.clone();
+    let control = LiveControl::install()?;
     if summarize_after {
         let llm = config.llm.as_ref().context(
             "no LLM provider is configured; add an `llm` section to the Meetlite configuration",
@@ -87,14 +92,42 @@ fn run_live_pipeline(
         // Prompt for both credentials before capture begins.
         Credentials::for_llm(&llm.auth)?;
     }
-    let transcription = transcription::transcribe_live(args, Some(&config.recording), stt, output)?;
+    let transcription = transcription::transcribe_live(
+        args,
+        Some(&config.recording),
+        stt,
+        output,
+        control.clone(),
+    )?;
     if summarize_after {
-        summary::summarize(
-            &transcription.transcript_path,
-            config.llm.as_ref(),
-            force,
-            output,
-        )?;
+        control.begin_summary();
+        if control.summary_stopped() {
+            return Ok(());
+        }
+        output.instruction("Summarizing. Press Ctrl-C to quit. Press Ctrl-D to quit immediately.");
+        let transcript_path = transcription.transcript_path;
+        let llm = config.llm.clone();
+        let (sender, receiver) = bounded(1);
+        thread::spawn(move || {
+            let result = summary::summarize(&transcript_path, llm.as_ref(), force, output);
+            let _ = sender.send(result);
+        });
+        loop {
+            if control.summary_stopped() {
+                output.instruction("Summary stopped.");
+                return Ok(());
+            }
+            match receiver.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => {
+                    result?;
+                    return Ok(());
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    anyhow::bail!("summary worker exited without a result")
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -147,6 +180,11 @@ fn setup_config(args: ConfigSetupArgs, config_path: Option<&Path>) -> Result<()>
                 Some(language) if language.is_empty() => None,
                 Some(language) => Some(language),
                 None => prompt_optional("STT language hint", stt.language.as_deref())?,
+            };
+            stt.prompt = match args.prompt {
+                Some(prompt) if prompt.is_empty() => None,
+                Some(prompt) => Some(prompt),
+                None => prompt_optional("STT prompt", stt.prompt.as_deref())?,
             };
             stt.auth = auth;
             config.stt = Some(stt);
