@@ -10,21 +10,56 @@ mod setup;
 mod summary;
 mod transcription;
 
-use anyhow::Result;
+use std::{ffi::OsString, process::ExitCode};
+
 use clap::Parser;
 use cli::Cli;
+use output::Output;
 
-fn main() -> Result<()> {
-    // LaunchServices passes a legacy process-serial argument to app executables.
-    // It is not part of Meetlite's CLI contract and would otherwise prevent the
-    // hidden capture-agent command from starting.
+fn main() -> ExitCode {
+    let arguments = arguments();
+    let json = arguments.iter().any(|argument| argument == "--json");
+    let cli = match Cli::try_parse_from(arguments) {
+        Ok(cli) => cli,
+        Err(error) if json => {
+            let _ = emit_error();
+            return ExitCode::from(error.exit_code() as u8);
+        }
+        Err(error) => {
+            let _ = error.print();
+            return ExitCode::from(error.exit_code() as u8);
+        }
+    };
+
+    match pipeline::run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_error) if json => {
+            let _ = emit_error();
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn arguments() -> Vec<OsString> {
     #[cfg(target_os = "macos")]
-    let arguments =
-        std::env::args_os().filter(|argument| !argument.to_string_lossy().starts_with("-psn_"));
-    #[cfg(target_os = "macos")]
-    let cli = Cli::parse_from(arguments);
+    {
+        std::env::args_os()
+            .filter(|argument| !argument.to_string_lossy().starts_with("-psn_"))
+            .collect()
+    }
     #[cfg(not(target_os = "macos"))]
-    let cli = Cli::parse();
+    {
+        std::env::args_os().collect()
+    }
+}
 
-    pipeline::run(cli)
+fn emit_error() -> anyhow::Result<()> {
+    Output::new(true).event(&serde_json::json!({
+        "type": "error",
+        "message": "Meetlite command failed",
+    }))
 }

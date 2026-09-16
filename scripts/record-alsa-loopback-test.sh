@@ -38,8 +38,10 @@ fi
 python3 -c 'import math, struct, sys; rate = 48000; sys.stdout.buffer.write(b"".join(struct.pack("<h", int(0.5 * 32767 * math.sin(2 * math.pi * 440 * i / rate))) for i in range(rate * 2)))' \
   | aplay -D hw:Loopback,0,0 -f S16_LE -r 48000 -c 1
 wait "$capture_pid"
+test ! -e "$output_dir/audio.wav"
+test ! -e "$output_dir/microphone.wav"
 
-python3 - "$output_dir/audio.wav" <<'PY'
+python3 - "$output_dir/system.wav" <<'PY'
 import sys
 import wave
 
@@ -49,7 +51,8 @@ with wave.open(sys.argv[1]) as recording:
         abs(int.from_bytes(samples[index:index + 2], "little", signed=True))
         for index in range(0, len(samples), 2)
     )
-    print(f"frames={recording.getnframes()} rate={recording.getframerate()} peak={peak}")
-    if recording.getframerate() != 48000 or peak <= 1000:
+    channels = recording.getnchannels()
+    print(f"frames={recording.getnframes()} rate={recording.getframerate()} channels={channels} peak={peak}")
+    if recording.getframerate() != 48000 or channels != 1 or peak <= 1000:
         raise SystemExit("loopback recording did not contain the generated tone")
 PY

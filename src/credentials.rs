@@ -20,11 +20,11 @@ pub enum Credentials {
 
 impl Credentials {
     pub fn for_stt(auth: &AuthConfig) -> Result<Self> {
-        Self::resolve(auth, STT_API_KEY_ENV)
+        Self::resolve(auth, STT_API_KEY_ENV, "stt")
     }
 
     pub fn for_llm(auth: &AuthConfig) -> Result<Self> {
-        Self::resolve(auth, LLM_API_KEY_ENV)
+        Self::resolve(auth, LLM_API_KEY_ENV, "llm")
     }
 
     pub fn apply(&self, request: RequestBuilder) -> RequestBuilder {
@@ -35,14 +35,14 @@ impl Credentials {
         }
     }
 
-    fn resolve(auth: &AuthConfig, override_env: &str) -> Result<Self> {
+    fn resolve(auth: &AuthConfig, override_env: &str, provider: &str) -> Result<Self> {
         match auth {
             AuthConfig::None => Ok(Credentials::None),
             AuthConfig::Bearer { token_env } => {
                 Ok(Credentials::Bearer(environment_value(token_env)?))
             }
             AuthConfig::BearerKeyring { .. } | AuthConfig::BearerPlain { .. } => Ok(auth
-                .bearer_token(override_env)?
+                .bearer_token(override_env, provider)?
                 .map(Credentials::Bearer)
                 .unwrap_or(Credentials::None)),
             AuthConfig::Header {

@@ -35,17 +35,33 @@ const WINDOW_DURATION: Duration = Duration::from_millis(20);
 const MAX_BUFFERED_FRAMES: usize = 256;
 const MAX_FRAME_TIMESTAMP_SKEW_SAMPLES: f64 = 32.0;
 const MAX_INTERPOLATED_GAP_SAMPLES: usize = 32;
-const MIC_GAIN: f32 = 1.0;
-const SYSTEM_GAIN: f32 = 0.8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SourceKind {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RecordingSource {
     Microphone,
     System,
 }
 
+pub(super) type SourceKind = RecordingSource;
+
+impl RecordingSource {
+    pub(crate) fn speaker(self) -> &'static str {
+        match self {
+            Self::Microphone => "You",
+            Self::System => "Remote",
+        }
+    }
+
+    pub(crate) fn file_name(self) -> &'static str {
+        match self {
+            Self::Microphone => artifacts::MICROPHONE_FILE,
+            Self::System => artifacts::SYSTEM_FILE,
+        }
+    }
+}
+
 struct AudioFrame {
-    source: SourceKind,
+    source: RecordingSource,
     captured_at: Instant,
     sample_rate: u32,
     samples: Vec<f32>,
@@ -59,14 +75,14 @@ impl AudioFrame {
 }
 
 struct SourceBuffer {
-    source: SourceKind,
+    source: RecordingSource,
     frames: VecDeque<AudioFrame>,
     next_frame_start: Option<Instant>,
     dropped_frames: u64,
 }
 
 impl SourceBuffer {
-    fn new(source: SourceKind) -> Self {
+    fn new(source: RecordingSource) -> Self {
         Self {
             source,
             frames: VecDeque::new(),
@@ -186,48 +202,50 @@ struct CaptureStatistics {
     dropped_buffered_frames: u64,
 }
 
-struct Mixer {
+struct SourceAligner {
     next_window: Instant,
     microphone: SourceBuffer,
     system: SourceBuffer,
-    microphone_gain: f32,
-    system_gain: f32,
     samples_written: usize,
-    emitted_samples: Vec<i16>,
+    emitted_microphone_samples: Vec<i16>,
+    emitted_system_samples: Vec<i16>,
 }
 
-impl Mixer {
-    fn new(started_at: Instant, microphone_gain: f32, system_gain: f32) -> Self {
+impl SourceAligner {
+    fn new(started_at: Instant) -> Self {
         Self {
             next_window: started_at,
-            microphone: SourceBuffer::new(SourceKind::Microphone),
-            system: SourceBuffer::new(SourceKind::System),
-            microphone_gain,
-            system_gain,
+            microphone: SourceBuffer::new(RecordingSource::Microphone),
+            system: SourceBuffer::new(RecordingSource::System),
             samples_written: 0,
-            emitted_samples: Vec::new(),
+            emitted_microphone_samples: Vec::new(),
+            emitted_system_samples: Vec::new(),
         }
     }
 
     fn write_ready<W: Write + Seek>(
         &mut self,
-        writer: &mut hound::WavWriter<W>,
+        mut microphone_writer: Option<&mut hound::WavWriter<W>>,
+        mut system_writer: Option<&mut hound::WavWriter<W>>,
         now: Instant,
         sample_limit: Option<usize>,
     ) -> Result<()> {
-        // Wait one additional window so callback scheduling jitter does not turn
-        // an otherwise available source frame into artificial silence.
         while now >= self.next_window + WINDOW_DURATION + WINDOW_DURATION
             && sample_limit.is_none_or(|limit| self.samples_written < limit)
         {
-            self.write_window(writer, sample_limit)?;
+            self.write_window(
+                microphone_writer.as_deref_mut(),
+                system_writer.as_deref_mut(),
+                sample_limit,
+            )?;
         }
         Ok(())
     }
 
     fn flush<W: Write + Seek>(
         &mut self,
-        writer: &mut hound::WavWriter<W>,
+        mut microphone_writer: Option<&mut hound::WavWriter<W>>,
+        mut system_writer: Option<&mut hound::WavWriter<W>>,
         sample_limit: Option<usize>,
     ) -> Result<()> {
         let last_frame_end = [self.microphone.last_end(), self.system.last_end()]
@@ -237,14 +255,19 @@ impl Mixer {
         while last_frame_end.is_some_and(|end| self.next_window < end)
             && sample_limit.is_none_or(|limit| self.samples_written < limit)
         {
-            self.write_window(writer, sample_limit)?;
+            self.write_window(
+                microphone_writer.as_deref_mut(),
+                system_writer.as_deref_mut(),
+                sample_limit,
+            )?;
         }
         Ok(())
     }
 
     fn write_window<W: Write + Seek>(
         &mut self,
-        writer: &mut hound::WavWriter<W>,
+        mut microphone_writer: Option<&mut hound::WavWriter<W>>,
+        mut system_writer: Option<&mut hound::WavWriter<W>>,
         sample_limit: Option<usize>,
     ) -> Result<()> {
         let mut microphone = vec![0.0; WINDOW_SAMPLES];
@@ -253,50 +276,75 @@ impl Mixer {
             .mix_window(self.next_window, &mut microphone);
         self.system.mix_window(self.next_window, &mut system);
 
-        let mut mixed: Vec<f32> = microphone
-            .iter()
-            .zip(&system)
-            .map(|(microphone, system)| {
-                microphone * self.microphone_gain + system * self.system_gain
-            })
-            .collect();
-        if let Some(peak) = mixed.iter().map(|sample| sample.abs()).reduce(f32::max) {
-            if peak > 1.0 {
-                for sample in &mut mixed {
-                    *sample /= peak;
-                }
-            }
-        }
-
         let remaining = sample_limit.map_or(WINDOW_SAMPLES, |limit| {
             limit
                 .saturating_sub(self.samples_written)
                 .min(WINDOW_SAMPLES)
         });
-        for sample in mixed.into_iter().take(remaining) {
-            let sample = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
-            writer
-                .write_sample(sample)
-                .context("could not write WAV sample")?;
-            self.emitted_samples.push(sample);
+        for index in 0..remaining {
+            if let Some(writer) = microphone_writer.as_mut() {
+                let sample = to_pcm(microphone[index]);
+                writer
+                    .write_sample(sample)
+                    .context("could not write microphone WAV sample")?;
+                self.emitted_microphone_samples.push(sample);
+            }
+            if let Some(writer) = system_writer.as_mut() {
+                let sample = to_pcm(system[index]);
+                writer
+                    .write_sample(sample)
+                    .context("could not write system WAV sample")?;
+                self.emitted_system_samples.push(sample);
+            }
         }
         self.samples_written += remaining;
         self.next_window += WINDOW_DURATION;
         Ok(())
     }
 
-    fn take_emitted_samples(&mut self) -> Vec<i16> {
-        std::mem::take(&mut self.emitted_samples)
+    fn take_emitted_samples(&mut self, source: RecordingSource) -> Vec<i16> {
+        match source {
+            RecordingSource::Microphone => std::mem::take(&mut self.emitted_microphone_samples),
+            RecordingSource::System => std::mem::take(&mut self.emitted_system_samples),
+        }
     }
 }
 
-pub fn record(args: CaptureArgs, config: Option<&RecordingConfig>) -> Result<()> {
+fn to_pcm(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
+}
+
+pub fn record(args: CaptureArgs, config: Option<&RecordingConfig>, output: Output) -> Result<()> {
     let control = LiveControl::install()?;
-    let recording = record_with_samples(args, config, Some(control), |_| {}, |_| {})?;
-    Output::new(false).status(
-        "Saved recording",
-        &recording.audio_file.display().to_string(),
-    );
+    let recording = record_with_samples(
+        args,
+        config,
+        Some(control),
+        output,
+        |recording| {
+            if output.is_json() {
+                output.event(&serde_json::json!({
+                    "type": "lifecycle",
+                    "phase": "recording_started",
+                    "output_dir": recording.output_dir.display().to_string(),
+                }))?;
+            }
+            Ok(())
+        },
+        |_, _| {},
+    )?;
+    if output.is_json() {
+        output.event(&serde_json::json!({
+            "type": "lifecycle",
+            "phase": "recording_stopped",
+            "output_dir": recording.output_dir.display().to_string(),
+        }))?;
+    } else {
+        output.status(
+            "Saved recording",
+            &recording.output_dir.display().to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -304,12 +352,13 @@ pub fn record_with_samples(
     args: CaptureArgs,
     config: Option<&RecordingConfig>,
     control: Option<LiveControl>,
-    on_started: impl FnOnce(&RecordingOutput),
-    on_samples: impl FnMut(&[i16]),
+    output: Output,
+    on_started: impl FnOnce(&RecordingOutput) -> Result<()>,
+    on_samples: impl FnMut(RecordingSource, &[i16]),
 ) -> Result<RecordingOutput> {
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (args, config, on_started, on_samples);
+        let _ = (args, config, output, on_started, on_samples);
         anyhow::bail!("recording is currently supported only on macOS and Linux")
     }
 
@@ -322,6 +371,7 @@ pub fn record_with_samples(
             &factory,
             CallbackSink::new(on_started, on_samples),
             control,
+            output,
         )
         .run()
     }
@@ -340,7 +390,7 @@ fn signed_duration_seconds(left: Instant, right: Instant) -> f64 {
 fn drain_sources(
     microphone: &mut Option<BoxedCaptureAdapter>,
     system: &mut Option<BoxedCaptureAdapter>,
-    mixer: &mut Mixer,
+    mixer: &mut SourceAligner,
 ) {
     if let Some(capture) = microphone {
         capture.drain_into(&mut mixer.microphone);
@@ -356,7 +406,7 @@ mod tests {
 
     use super::*;
 
-    fn frame(source: SourceKind, start: Instant, samples: Vec<f32>) -> AudioFrame {
+    fn frame(source: RecordingSource, start: Instant, samples: Vec<f32>) -> AudioFrame {
         AudioFrame {
             source,
             captured_at: start,
@@ -366,40 +416,59 @@ mod tests {
     }
 
     #[test]
-    fn mixer_aligns_sources_and_zero_fills_missing_windows() {
+    fn source_aligner_aligns_sources_and_zero_fills_missing_windows() {
         let start = Instant::now();
-        let mut mixer = Mixer::new(start, 1.0, 1.0);
+        let mut mixer = SourceAligner::new(start);
         mixer.microphone.push(frame(
-            SourceKind::Microphone,
+            RecordingSource::Microphone,
             start,
             vec![0.25; WINDOW_SAMPLES],
         ));
         mixer.system.push(frame(
-            SourceKind::System,
+            RecordingSource::System,
             start + Duration::from_millis(20),
             vec![0.5; WINDOW_SAMPLES],
         ));
 
-        let file = tempfile::NamedTempFile::new().unwrap();
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: SAMPLE_RATE,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let mut writer = hound::WavWriter::new(file.reopen().unwrap(), spec).unwrap();
-        mixer.flush(&mut writer, None).unwrap();
-        writer.finalize().unwrap();
-
-        let samples: Vec<i16> = hound::WavReader::open(file.path())
+        let microphone_file = tempfile::NamedTempFile::new().unwrap();
+        let system_file = tempfile::NamedTempFile::new().unwrap();
+        let mut microphone_writer =
+            hound::WavWriter::new(microphone_file.reopen().unwrap(), spec).unwrap();
+        let mut system_writer = hound::WavWriter::new(system_file.reopen().unwrap(), spec).unwrap();
+        mixer
+            .flush(Some(&mut microphone_writer), Some(&mut system_writer), None)
+            .unwrap();
+        let emitted_microphone = mixer.take_emitted_samples(RecordingSource::Microphone);
+        let emitted_system = mixer.take_emitted_samples(RecordingSource::System);
+        microphone_writer.finalize().unwrap();
+        system_writer.finalize().unwrap();
+        let microphone_samples: Vec<i16> = hound::WavReader::open(microphone_file.path())
             .unwrap()
             .samples::<i16>()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(samples.len(), WINDOW_SAMPLES * 2);
-        assert_eq!(samples[0], (0.25 * i16::MAX as f32).round() as i16);
+        let system_samples: Vec<i16> = hound::WavReader::open(system_file.path())
+            .unwrap()
+            .samples::<i16>()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(emitted_microphone, microphone_samples);
+        assert_eq!(emitted_system, system_samples);
+        assert_eq!(microphone_samples.len(), system_samples.len());
         assert_eq!(
-            samples[WINDOW_SAMPLES],
+            microphone_samples[0],
+            (0.25 * i16::MAX as f32).round() as i16
+        );
+        assert_eq!(microphone_samples[WINDOW_SAMPLES], 0);
+        assert_eq!(system_samples[0], 0);
+        assert_eq!(
+            system_samples[WINDOW_SAMPLES],
             (0.5 * i16::MAX as f32).round() as i16
         );
     }
@@ -407,16 +476,37 @@ mod tests {
     #[test]
     fn forced_output_directory_removes_only_meetlite_artifacts() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("audio.wav"), "old audio").unwrap();
+        fs::write(directory.path().join("audio.wav"), "legacy audio").unwrap();
         fs::write(directory.path().join("notes.txt"), "keep me").unwrap();
+        for name in [
+            "microphone.wav",
+            "system.wav",
+            "metadata.json.tmp",
+            "transcript.json.tmp",
+            "summary.md.tmp",
+        ] {
+            fs::write(directory.path().join(name), "old artifact").unwrap();
+        }
         fs::create_dir(directory.path().join("chunks")).unwrap();
         fs::write(directory.path().join("chunks/old.wav"), "old chunk").unwrap();
 
         assert!(artifacts::output_dir(Some(directory.path()), false).is_err());
         artifacts::output_dir(Some(directory.path()), true).unwrap();
 
-        assert!(!directory.path().join("audio.wav").exists());
+        assert_eq!(
+            fs::read_to_string(directory.path().join("audio.wav")).unwrap(),
+            "legacy audio"
+        );
         assert!(!directory.path().join("chunks").exists());
+        for name in [
+            "microphone.wav",
+            "system.wav",
+            "metadata.json.tmp",
+            "transcript.json.tmp",
+            "summary.md.tmp",
+        ] {
+            assert!(!directory.path().join(name).exists());
+        }
         assert_eq!(
             fs::read_to_string(directory.path().join("notes.txt")).unwrap(),
             "keep me"
@@ -424,45 +514,12 @@ mod tests {
     }
 
     #[test]
-    fn mixer_scales_an_overloaded_window_instead_of_clipping_each_sample() {
-        let start = Instant::now();
-        let mut mixer = Mixer::new(start, 1.0, 1.0);
-        mixer.microphone.push(frame(
-            SourceKind::Microphone,
-            start,
-            vec![1.0; WINDOW_SAMPLES],
-        ));
-        mixer
-            .system
-            .push(frame(SourceKind::System, start, vec![0.5; WINDOW_SAMPLES]));
-
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: SAMPLE_RATE,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::new(file.reopen().unwrap(), spec).unwrap();
-        mixer.flush(&mut writer, None).unwrap();
-        writer.finalize().unwrap();
-
-        let sample = hound::WavReader::open(file.path())
-            .unwrap()
-            .samples::<i16>()
-            .next()
-            .unwrap()
-            .unwrap();
-        assert_eq!(sample, i16::MAX);
-    }
-
-    #[test]
     fn source_buffer_does_not_sum_overlapping_frames_from_the_same_source() {
         let start = Instant::now();
-        let mut buffer = SourceBuffer::new(SourceKind::System);
-        buffer.push(frame(SourceKind::System, start, vec![0.25; 2]));
+        let mut buffer = SourceBuffer::new(RecordingSource::System);
+        buffer.push(frame(RecordingSource::System, start, vec![0.25; 2]));
         buffer.push(frame(
-            SourceKind::System,
+            RecordingSource::System,
             start + Duration::from_secs_f64(1.0 / SAMPLE_RATE as f64),
             vec![0.5; 2],
         ));
@@ -484,11 +541,11 @@ mod tests {
     }
 
     #[test]
-    fn mixer_writes_a_partial_final_window_at_the_requested_duration() {
+    fn source_aligner_writes_a_partial_final_window_at_the_requested_duration() {
         let start = Instant::now();
-        let mut mixer = Mixer::new(start, 1.0, 0.0);
+        let mut mixer = SourceAligner::new(start);
         mixer.microphone.push(frame(
-            SourceKind::Microphone,
+            RecordingSource::Microphone,
             start,
             vec![0.25; WINDOW_SAMPLES],
         ));
@@ -501,7 +558,7 @@ mod tests {
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::new(file.reopen().unwrap(), spec).unwrap();
-        mixer.flush(&mut writer, Some(100)).unwrap();
+        mixer.flush(Some(&mut writer), None, Some(100)).unwrap();
         writer.finalize().unwrap();
 
         assert_eq!(hound::WavReader::open(file.path()).unwrap().len(), 100);
@@ -510,9 +567,9 @@ mod tests {
     #[test]
     fn source_buffer_discards_oldest_frames_when_full() {
         let start = Instant::now();
-        let mut buffer = SourceBuffer::new(SourceKind::Microphone);
+        let mut buffer = SourceBuffer::new(RecordingSource::Microphone);
         for _ in 0..=MAX_BUFFERED_FRAMES {
-            buffer.push(frame(SourceKind::Microphone, start, vec![0.0]));
+            buffer.push(frame(RecordingSource::Microphone, start, vec![0.0]));
         }
         assert_eq!(buffer.frames.len(), MAX_BUFFERED_FRAMES);
         assert_eq!(buffer.dropped_frames(), 1);

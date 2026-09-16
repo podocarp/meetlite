@@ -35,7 +35,17 @@ impl Output {
     }
 
     pub fn event(self, value: &Value) -> Result<()> {
-        self.line(&serde_json::to_string(value)?)
+        self.events(std::slice::from_ref(value))
+    }
+
+    pub fn events(self, values: &[Value]) -> Result<()> {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        for value in values {
+            serde_json::to_writer(&mut stdout, value)?;
+            writeln!(stdout).context("could not write terminal output")?;
+        }
+        stdout.flush().context("could not flush terminal output")
     }
 
     pub fn status(self, label: &str, value: &str) {
@@ -47,7 +57,7 @@ impl Output {
 
     pub fn instruction(self, value: &str) {
         if !self.json {
-            println!("{}", style(value, "2"));
+            eprintln!("{}", style(value, "2"));
         }
     }
 

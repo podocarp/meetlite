@@ -4,14 +4,12 @@ use anyhow::{bail, Result};
 
 use crate::{cli::CaptureArgs, config::RecordingConfig};
 
-use super::{MIC_GAIN, SAMPLE_RATE, SYSTEM_GAIN};
+use super::SAMPLE_RATE;
 
 pub(super) struct RecordingPlan {
     pub(super) output: Option<PathBuf>,
     pub(super) force: bool,
     pub(super) duration_seconds: Option<u64>,
-    pub(super) microphone_gain: f32,
-    pub(super) system_gain: f32,
     pub(super) microphone: Option<SourcePlan>,
     pub(super) system: Option<SourcePlan>,
 }
@@ -26,20 +24,6 @@ impl RecordingPlan {
             bail!("at least one audio source must be enabled")
         }
 
-        let microphone_gain = args
-            .microphone_gain
-            .unwrap_or_else(|| config.map_or(MIC_GAIN, |config| config.microphone_gain));
-        let system_gain = args
-            .system_gain
-            .unwrap_or_else(|| config.map_or(SYSTEM_GAIN, |config| config.system_gain));
-        if !microphone_gain.is_finite()
-            || microphone_gain < 0.0
-            || !system_gain.is_finite()
-            || system_gain < 0.0
-        {
-            bail!("recording gains must be finite, non-negative numbers")
-        }
-
         let microphone = (!args.no_microphone).then(|| SourcePlan {
             device_name: config.and_then(|config| config.microphone_device.clone()),
         });
@@ -51,8 +35,6 @@ impl RecordingPlan {
             output: args.output,
             force: args.force,
             duration_seconds: args.duration,
-            microphone_gain,
-            system_gain,
             microphone,
             system,
         })

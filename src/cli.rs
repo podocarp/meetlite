@@ -25,9 +25,9 @@ pub struct Cli {
 pub enum Command {
     /// Record, transcribe live, and summarize when recording finishes.
     Start(CaptureArgs),
-    /// Record microphone and system audio into a local WAV file.
+    /// Record microphone and system audio into aligned source WAV files.
     Record(RecordArgs),
-    /// Transcribe an existing audio recording.
+    /// Transcribe an existing audio file or Meetlite recording directory.
     Transcribe(TranscribeArgs),
     /// Generate a Markdown summary from a transcript.
     Summarize(SummarizeArgs),
@@ -72,14 +72,6 @@ pub struct CaptureArgs {
     #[arg(long)]
     pub no_system_audio: bool,
 
-    /// Override the configured microphone gain.
-    #[arg(long)]
-    pub microphone_gain: Option<f32>,
-
-    /// Override the configured system-audio gain.
-    #[arg(long)]
-    pub system_gain: Option<f32>,
-
     /// Replace existing Meetlite artifacts in the output directory.
     #[arg(long)]
     pub force: bool,
@@ -101,7 +93,7 @@ pub struct RecordArgs {
 
 #[derive(Debug, Args)]
 pub struct TranscribeArgs {
-    /// Existing audio file to transcribe.
+    /// Existing audio file or Meetlite recording directory to transcribe.
     pub input: PathBuf,
 
     /// Directory where transcript artifacts will be written.
@@ -129,8 +121,19 @@ pub enum ConfigCommand {
     Init,
     /// Print the effective configuration path.
     Path,
+    /// Report configuration usability and redacted settings.
+    Status,
+    /// Apply GUI configuration from standard input.
+    Apply(ConfigApplyArgs),
     /// Configure a transcription or summary provider.
     Setup(ConfigSetupArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigApplyArgs {
+    /// Read a purpose-built JSON configuration payload from standard input.
+    #[arg(long, required = true)]
+    pub stdin_json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -146,14 +149,6 @@ pub struct ConfigSetupArgs {
     /// Provider model name.
     #[arg(long)]
     pub model: Option<String>,
-
-    /// API key. Omit to be prompted, or pass an empty string to configure without one.
-    #[arg(long)]
-    pub api_key: Option<String>,
-
-    /// Store the API key directly in config instead of the OS keyring.
-    #[arg(long)]
-    pub no_keyring: bool,
 
     /// Provider API style.
     #[arg(long, value_enum)]
@@ -239,14 +234,41 @@ mod tests {
     }
 
     #[test]
-    fn config_setup_accepts_provider() {
+    fn config_status_and_apply_parser_contract() {
+        let cli = Cli::try_parse_from(["meetlite", "--json", "config", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::Status
+            }
+        ));
+        let cli =
+            Cli::try_parse_from(["meetlite", "--json", "config", "apply", "--stdin-json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::Apply(ConfigApplyArgs { stdin_json: true })
+            }
+        ));
+        assert!(Cli::try_parse_from(["meetlite", "config", "apply"]).is_err());
+        assert!(Cli::try_parse_from([
+            "meetlite",
+            "config",
+            "apply",
+            "--stdin-json",
+            "--api-key",
+            "secret"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn config_setup_accepts_provider_without_argv_secrets() {
         let cli = Cli::try_parse_from([
             "meetlite",
             "config",
             "setup",
             "stt",
-            "--api-key",
-            "",
             "--api-style",
             "openai-compatible",
         ])
@@ -258,7 +280,13 @@ mod tests {
             panic!("expected config setup command")
         };
         assert_eq!(args.provider, ConfigProvider::Stt);
-        assert_eq!(args.api_key.as_deref(), Some(""));
         assert_eq!(args.api_style, Some(ConfigApiStyle::OpenAiCompatible));
+        assert!(
+            Cli::try_parse_from(["meetlite", "config", "setup", "stt", "--api-key", "secret"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["meetlite", "config", "setup", "stt", "--no-keyring"]).is_err()
+        );
     }
 }

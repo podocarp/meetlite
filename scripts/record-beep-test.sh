@@ -75,10 +75,12 @@ player_pid=$!
   --output "$output_directory"
 
 wait "$player_pid" || true
-afinfo "$output_directory/audio.wav"
+test ! -e "$output_directory/audio.wav"
+test ! -e "$output_directory/microphone.wav"
+afinfo "$output_directory/system.wav"
 python3 "$repo_root/scripts/analyze-recording.py" \
   "$fixture" \
-  "$output_directory/audio.wav" \
+  "$output_directory/system.wav" \
   "$playback_rate"
 test -s "$output_directory/metadata.json"
-printf 'Recording written to %s\n' "$output_directory/audio.wav"
+printf 'Recording written to %s\n' "$output_directory/system.wav"
