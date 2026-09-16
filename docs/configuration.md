@@ -17,11 +17,14 @@ meetlite config setup stt
 meetlite config setup llm
 ```
 
-Print the active path:
+Print the active path or inspect redacted configuration usability:
 
 ```bash
 meetlite config path
+meetlite config status
 ```
+
+The native GUI uses `meetlite --json config apply --stdin-json` to update settings. Its purpose-built JSON payload is sent through standard input so API keys never appear in process arguments. A managed saved key appears only as the literal non-secret mask `********`: leave it unchanged to preserve the Keychain value, clear it to remove that provider's managed key, or replace it with a new key.
 
 Use `MEETLITE_CONFIG` or `meetlite --config PATH` to use a different file.
 
@@ -34,11 +37,10 @@ STT and LLM examples so setup is discoverable:
 {
   "recording": {
     "sample_rate": 48000,
-    "microphone_gain": 1.0,
-    "system_gain": 0.8,
     "microphone_device": null,
     "system_device": null
   },
+  "summary_enabled": true,
   "stt": {
     "api_style": "openai-compatible",
     "base_url": "https://api.openai.com/v1",
@@ -72,11 +74,16 @@ STT and LLM examples so setup is discoverable:
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `sample_rate` | `48000` | Output WAV sample rate. |
-| `microphone_gain` | `1.0` | Microphone gain before mixing. |
-| `system_gain` | `0.8` | System-audio gain before mixing. |
+| `sample_rate` | `48000` | Source WAV sample rate. |
 | `microphone_device` | `null` | Use the default microphone unless set. |
 | `system_device` | `null` | Linux ALSA fallback device when PulseAudio is unavailable. |
+
+Each enabled source is saved as a timestamp-aligned mono 48 kHz WAV file:
+`microphone.wav` for local speech and `system.wav` for meeting audio. Meetlite
+never creates `audio.wav`; users may mix the tracks externally. Passing the
+recording directory to `meetlite transcribe` transcribes both available tracks
+and labels segments as `You` and `Remote` respectively. This does not
+distinguish individual remote participants.
 
 On macOS, system audio is captured from the default output through
 `MeetliteCapture.app`; `recording.system_device` is not used.
@@ -107,7 +114,7 @@ Currently, Meetlite supports `openai-compatible` multipart transcription APIs.
     "auth": {
       "type": "bearer_keyring",
       "service": "Meetlite",
-      "user": "Meetlite STT API Key"
+      "user": "Meetlite API Credentials"
     }
   }
 }
@@ -117,9 +124,7 @@ Currently, Meetlite supports `openai-compatible` multipart transcription APIs.
 
 ## Summary settings
 
-`llm` is required for `meetlite start`, `meetlite summarize`, and
-`meetlite record --summarize`. It uses a supported API style. Currently,
-Meetlite supports streaming `openai-compatible` chat-completions APIs.
+`summary_enabled` controls whether `meetlite start` summarizes after transcription and defaults to `true`. `llm` is required when summaries are enabled, for `meetlite summarize`, and for `meetlite record --summarize`. It uses a supported API style. Currently, Meetlite supports streaming `openai-compatible` chat-completions APIs.
 
 ```json
 {
@@ -131,7 +136,7 @@ Meetlite supports streaming `openai-compatible` chat-completions APIs.
     "auth": {
       "type": "bearer_keyring",
       "service": "Meetlite",
-      "user": "Meetlite LLM API Key"
+      "user": "Meetlite API Credentials"
     },
     "instructions": "Correct Acme to Acme Corp and use the spelling Nia Chen."
   }
@@ -142,17 +147,20 @@ Meetlite supports streaming `openai-compatible` chat-completions APIs.
 
 ## Authentication
 
-`meetlite config setup stt` and `meetlite config setup llm` try to store API keys
-in the OS keyring. If the keyring is unavailable, Meetlite stores the key in the
-private configuration file. On macOS, choose Allow or Always Allow if Keychain
-prompts for access. Meetlite resolves STT credentials before recording starts
-and reuses the result for every live-transcription request. `MEETLITE_STT_API_KEY`
-and `MEETLITE_LLM_API_KEY` override configured bearer tokens when set.
+`meetlite config setup stt` and `meetlite config setup llm` securely prompt for their separate API keys and store them together in one Meetlite OS-keyring item. This lets macOS authorize the item once while Meetlite selects the STT or LLM credential as needed. Setup fails without writing the key to the configuration file when the keyring is unavailable. On macOS, choose Allow or Always Allow if Keychain prompts for access. Meetlite resolves STT credentials before recording starts and reuses the result for every live-transcription request. `MEETLITE_STT_API_KEY` and `MEETLITE_LLM_API_KEY` override configured bearer tokens when set.
+
+Older releases stored credentials in separate `Meetlite STT API Key` and
+`Meetlite LLM API Key` items (and some used `meetlite/stt-api-key` or
+`meetlite/llm-api-key`). Configurations that still reference those entries remain
+read-compatible. To move a provider to the combined item, enter a replacement
+key in Settings or run `meetlite config setup stt` or
+`meetlite config setup llm`. The old item is left in place and may be removed
+manually after the replacement configuration works.
 
 OS keyring bearer token:
 
 ```json
-"auth": { "type": "bearer_keyring", "service": "Meetlite", "user": "Meetlite STT API Key" }
+"auth": { "type": "bearer_keyring", "service": "Meetlite", "user": "Meetlite API Credentials" }
 ```
 
 Plain config bearer token:

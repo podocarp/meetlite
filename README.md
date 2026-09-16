@@ -7,14 +7,15 @@
 > [!NOTE]
 > Meetlite is early software. Notably, windows support is still missing!
 
-Meetlite is a simple CLI meeting recorder and optional transcriber and
-summarizer. It's born out of my frustration at the lack of a simple,
+Meetlite is a simple meeting recorder with a CLI and lightweight native GUI,
+plus optional transcription and summarization. It's born out of my frustration
+at the lack of a simple,
 low-resource consumption tool that can eventually work across the machines I
 actually use.
 
-In summary: Unix philosophy. I just want a tool that does recording, mixing,
-filtering really well (it is harder than you think!), and optionally hooks into
-separate transcription and summarization APIs downstream for convenience.
+In summary: Unix philosophy. I just want a tool that does recording really well
+(it is harder than you think!), keeps sources separate for downstream tools, and
+optionally hooks into transcription and summarization APIs for convenience.
 
 It is heavily inspired by [meetily](https://github.com/Zackriya-Solutions/meetily)
 but I wanted to solve two problems with such offerings:
@@ -59,12 +60,23 @@ curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install
 > handles signing and TCC permissions so the CLI can capture system audio without
 > requiring manual `open` commands or flags.
 
-The Linux archive is currently not self-contained. It requires a compatible
-glibc plus PulseAudio or ALSA runtime libraries on the host. On Debian/Ubuntu,
-that usually means:
+The install command installs only the CLI (and, on macOS, its capture
+companion). GUI downloads are separate release assets:
+
+- macOS Apple Silicon: `Meetlite-macos-aarch64.app.zip`. Unzip it, move
+  `Meetlite.app` to `/Applications`, then open it from Finder or with
+  `open /Applications/Meetlite.app`.
+- Linux x86_64: `meetlite-gui-linux-x86_64.tar.gz`. Extract it and keep the
+  sibling `meetlite` and `meetlite-gui` binaries together, then run
+  `./meetlite-gui`.
+
+Neither Linux tarball is self-contained. Both require compatible glibc,
+PulseAudio or ALSA, and CA certificates; the GUI tarball additionally requires
+a graphical X11 or Wayland session, `libxkbcommon`, and OpenGL/EGL libraries.
+On Debian/Ubuntu, typical runtime packages are:
 
 ```bash
-sudo apt install libasound2 libpulse0 ca-certificates
+sudo apt install libasound2 libpulse0 ca-certificates libxkbcommon0 libxkbcommon-x11-0 libgl1 libegl1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-6 libx11-xcb1 libxcursor1 libxi6 libxrandr2
 ```
 
 Meetlite captures the current default PulseAudio monitor automatically,
@@ -80,7 +92,13 @@ Windows is not implemented, but will be once I get a windows machine to test on.
 
 ## Quick Start
 
-Core commands:
+Open `Meetlite.app` or run `./meetlite-gui` from the extracted Linux directory
+to use the native GUI. It configures providers, starts the CLI recording
+pipeline, displays live transcript and
+summary output, and provides phase-aware stop controls. Recordings and generated
+artifacts are preserved when the GUI session is reset.
+
+Core CLI commands:
 
 ```bash
 meetlite devices # list microphones
@@ -88,7 +106,7 @@ meetlite start   # records, live-transcribes, then streams and saves a summary
 meetlite record  # records only
 meetlite record --transcribe # records with live transcription
 meetlite record --summarize  # alternate entry point for the start pipeline
-meetlite transcribe <AUDIO_FILE> # transcribe an existing recording
+meetlite transcribe <RECORDING_DIRECTORY> # transcribe an existing recording
 meetlite summarize <TRANSCRIPT>  # stream and save a summary
 ```
 
@@ -99,9 +117,16 @@ commands. For instance record for one minute into a chosen directory:
 meetlite record --duration 60 --output ./team-sync
 ```
 
-Meetlite writes `audio.wav` and `metadata.json` to the output directory. Without
-`--output`, it creates a timestamped `meetlite-...` directory in the current
-working directory.
+Meetlite writes `microphone.wav` and/or `system.wav` as aligned mono 48 kHz
+tracks, plus `metadata.json`, to the output directory. It never creates
+`audio.wav`; mix both tracks externally when desired:
+
+```bash
+ffmpeg -i microphone.wav -i system.wav -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ac 1 audio.wav
+```
+
+Without `--output`, Meetlite creates a timestamped `meetlite-...` directory in
+the current working directory.
 
 ## Transcription
 
@@ -133,7 +158,7 @@ Set the key, then transcribe an existing recording:
 
 ```bash
 export MEETLITE_STT_API_KEY='...'
-./meetlite transcribe ./team-sync/audio.wav
+./meetlite transcribe ./team-sync
 ```
 
 Record and transcribe live:
@@ -143,8 +168,10 @@ Record and transcribe live:
 ```
 
 Live transcription streams completed 15-second transcript chunks to the terminal,
-preserves `audio.wav`, writes progress to `transcript.jsonl`, and writes the
-completed result to `transcript.json`.
+preserves the aligned source tracks, writes progress to `transcript.jsonl`, and
+writes the completed result to `transcript.json`. The completed transcript
+transcribes the separate source tracks and labels microphone speech as `You` and
+system audio as `Remote`; individual remote participants remain unlabeled.
 
 Meetlite refuses to replace an existing output directory or generated transcript
 by default. Use `--force` to replace Meetlite artifacts in a specified recording
@@ -205,4 +232,4 @@ Use global `--json` for newline-delimited JSON progress events.
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Build from source](docs/building.md)
-- [Project plan](PLAN.md)
+- [GUI architecture](docs/gui.md)

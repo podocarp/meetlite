@@ -8,8 +8,11 @@ should prefer the published release archives from GitHub Releases.
 ### Requirements
 
 - macOS 14.4 or later.
-- A current stable Rust toolchain from [rustup](https://rustup.rs/).
+- [Nix](https://nixos.org/download/) with flakes enabled.
 - Full Xcode from the App Store, not only the command line tools.
+
+The Nix development shell supplies Cargo, Rust, Python, and the manifest-signing
+Python dependency while selecting Xcode's compiler and macOS SDK.
 
 Select the full Xcode toolchain after installing it:
 
@@ -22,21 +25,30 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 ```bash
 git clone https://github.com/podocarp/meetlite.git
 cd meetlite
-bash scripts/build-macos-app.sh
+nix develop --command bash scripts/build-macos-app.sh
 ```
 
-The script builds the CLI and the macOS capture companion, embeds their plist
-files, and applies an ad-hoc signature:
+The script uses locked dependencies, builds the CLI, GUI, and macOS capture
+companion, derives the GUI bundle versions from the Cargo package version, and
+applies ad-hoc signatures:
 
 ```text
 dist/meetlite
+dist/Meetlite.app
 dist/MeetliteCapture.app
 ```
 
-Run the development CLI directly:
+Open the GUI or run the CLI directly:
 
 ```bash
+open dist/Meetlite.app
 dist/meetlite record --duration 60
+```
+
+For a CLI-only build that does not create or sign app bundles:
+
+```bash
+nix develop --command cargo build --release --locked --bin meetlite
 ```
 
 The release installer places the capture companion at
@@ -46,40 +58,53 @@ the sibling `dist/MeetliteCapture.app` when no installed agent is present.
 ### Verify
 
 ```bash
-cargo fmt --check
-cargo test
-bash scripts/record-beep-test.sh
+nix develop --command cargo fmt --check
+nix develop --command cargo test --locked
+nix develop --command bash scripts/record-beep-test.sh
 ```
 
 The beep test builds the app, rejects a generated silent recording as a negative
-control, records system audio, and verifies the resulting WAV contains a tone
-from the beep fixture.
+control, records system audio, and verifies the resulting `system.wav` contains
+a tone from the beep fixture.
 
 ## Linux
 
-Linux recording is intended to work across distributions. Debian 11 x86_64 is the
-current tested checkpoint. Linux builds require Rust, `pkg-config`, ALSA
-development headers, and the PulseAudio client library.
+Linux recording is intended to work across distributions. Debian 11 x86_64 is
+the current tested checkpoint. CLI builds require Rust, `pkg-config`, ALSA
+development headers, and the PulseAudio client library. GUI builds additionally
+require X11, Wayland, `libxkbcommon`, and OpenGL/EGL development libraries.
 
 ```bash
 sudo apt update
-sudo apt install build-essential pkg-config libasound2-dev libpulse-dev ca-certificates
+sudo apt install build-essential pkg-config libasound2-dev libpulse-dev ca-certificates libx11-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libgl1-mesa-dev libegl1-mesa-dev
 ```
 
 Install a current stable Rust toolchain through [rustup](https://rustup.rs/),
-then build:
+then build and test with locked dependencies:
 
 ```bash
-cargo test
-cargo build --release
+cargo test --locked
+cargo build --release --locked --bin meetlite --bin meetlite-gui
 ```
 
-Run the built CLI:
+For a CLI-only build, omit the GUI binary:
+
+```bash
+cargo build --release --locked --bin meetlite
+```
+
+Run either built interface:
 
 ```bash
 target/release/meetlite devices
 target/release/meetlite record --duration 60 --output ./meeting
+target/release/meetlite-gui
 ```
+
+The published Linux GUI tarball contains both executables because the GUI
+locates the CLI beside itself. It is not an installer or self-contained bundle;
+keep the binaries together and provide the runtime libraries listed in the
+README.
 
 Microphone capture uses CPAL. System audio first records the current default
 PulseAudio monitor, which is the normal path on many Linux desktop sessions. This
@@ -116,12 +141,13 @@ Set `MEETLITE_LINUX_SYSTEM_DEVICE` when your loopback capture PCM differs from
 `hw:Loopback,1,0`.
 
 The test scripts require `python3`; the PulseAudio test also requires `pactl` and
-`pacat`. Run them inside `nix develop` if you use the Nix shell.
+`pacat`. They validate a mono 48 kHz `system.wav` and reject an unexpected
+`audio.wav`. Run them inside `nix develop` if you use the Nix shell.
 
 ## Nix development shell
 
-Nix is optional. It provides a pinned Rust development environment and
-`whisper-server` for local transcription testing:
+Nix is optional on Linux and required by the documented macOS build. It
+provides the Rust toolchain and native development dependencies used by CI:
 
 ```bash
 nix develop
