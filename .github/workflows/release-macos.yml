@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release-capture-agent:
+  release-macos:
     strategy:
       fail-fast: false
       matrix:
@@ -28,9 +28,11 @@ jobs:
       - name: Require manifest signing secret
         run: |
           test -n "$MEETLITE_MANIFEST_SIGNING_KEY"
-      - name: Build ad-hoc signed apps
+      - name: Build CLI and ad-hoc signed apps
+        env:
+          MEETLITE_RELEASE_VERSION: ${{ github.ref_name }}
         run: nix develop --command bash scripts/build-macos-app.sh
-      - name: Package ad-hoc capture agent and sign manifest
+      - name: Package release assets and sign capture manifest
         env:
           TAG: ${{ github.ref_name }}
           ARCHITECTURE: ${{ matrix.architecture }}
@@ -38,6 +40,7 @@ jobs:
           nix develop --command bash <<'BASH'
           set -euo pipefail
           CLI_ARCHIVE="meetlite-macos-$ARCHITECTURE.zip"
+          GUI_ARCHIVE="Meetlite-macos-$ARCHITECTURE.app.zip"
           AGENT_ARCHIVE="MeetliteCapture-macos-$ARCHITECTURE.app.zip"
           MANIFEST="MeetliteCapture-macos-$ARCHITECTURE.manifest.json"
           CLI_PACKAGE="meetlite-macos-$ARCHITECTURE"
@@ -46,6 +49,7 @@ jobs:
           cp dist/meetlite "$CLI_PACKAGE/meetlite"
           ditto dist/MeetliteCapture.app "$CLI_PACKAGE/MeetliteCapture.app"
           ditto -c -k --sequesterRsrc "$CLI_PACKAGE" "$CLI_ARCHIVE"
+          ditto -c -k --sequesterRsrc --keepParent dist/Meetlite.app "$GUI_ARCHIVE"
           ditto -c -k --sequesterRsrc --keepParent dist/MeetliteCapture.app "$AGENT_ARCHIVE"
           ARCHIVE_SHA256="$(shasum -a 256 "$AGENT_ARCHIVE" | cut -d ' ' -f 1)"
           ARCHIVE_URL="https://github.com/podocarp/meetlite/releases/download/$TAG/$AGENT_ARCHIVE"
@@ -89,6 +93,7 @@ jobs:
           gh release view "$TAG" >/dev/null
           gh release upload "$TAG" --clobber \
             "meetlite-macos-$ARCHITECTURE.zip" \
+            "Meetlite-macos-$ARCHITECTURE.app.zip" \
             "MeetliteCapture-macos-$ARCHITECTURE.app.zip" \
             "MeetliteCapture-macos-$ARCHITECTURE.manifest.json" \
             scripts/install.sh

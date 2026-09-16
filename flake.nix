@@ -52,10 +52,20 @@
             binutils
             cargo
             gh
+            libGL
+            libglvnd
+            libxkbcommon
+            mesa
             pkg-config
             pulseaudio
             rustc
             rustfmt
+            wayland
+            wayland-protocols
+            libx11
+            libxcursor
+            libxi
+            libxrandr
           ];
         };
     };
