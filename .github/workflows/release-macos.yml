@@ -32,6 +32,8 @@ jobs:
         env:
           MEETLITE_RELEASE_VERSION: ${{ github.ref_name }}
         run: nix develop --command bash scripts/build-macos-app.sh
+      - name: Test installer modes
+        run: bash scripts/test-install.sh
       - name: Package release assets and sign capture manifest
         env:
           TAG: ${{ github.ref_name }}

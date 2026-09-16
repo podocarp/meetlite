@@ -46,9 +46,11 @@ Windows system-audio capture is not implemented yet.
 curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install.sh | sh
 ```
 
-This installs `meetlite` to `~/.local/bin` by default and adds that directory to
-your active shell profile when needed. Set `INSTALL_DIR` to choose another
-location:
+This installs the CLI and native GUI by default. The CLI is written to
+`~/.local/bin` and that directory is added to your active shell profile when
+needed. On Linux, `meetlite-gui` is installed beside it. On macOS,
+`Meetlite.app` is installed to `~/Applications` and the CLI remains available in
+`~/.local/bin`. Set `INSTALL_DIR` to choose another binary directory:
 
 ```bash
 curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install.sh | INSTALL_DIR=/usr/local/bin sh
@@ -58,17 +60,21 @@ curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install
 > On macOS the installer also installs the LaunchServices capture companion to
 > `~/Library/Application Support/Meetlite/MeetliteCapture.app`. This companion
 > handles signing and TCC permissions so the CLI can capture system audio without
-> requiring manual `open` commands or flags.
+> requiring manual `open` commands or flags. Set `APP_INSTALL_DIR` to install
+> `Meetlite.app` somewhere other than `~/Applications`.
 
-The install command installs only the CLI (and, on macOS, its capture
-companion). GUI downloads are separate release assets:
+Use `--cli-only` to skip the GUI while retaining the CLI and required macOS
+capture companion:
 
-- macOS Apple Silicon: `Meetlite-macos-aarch64.app.zip`. Unzip it, move
-  `Meetlite.app` to `/Applications`, then open it from Finder or with
-  `open /Applications/Meetlite.app`.
-- Linux x86_64: `meetlite-gui-linux-x86_64.tar.gz`. Extract it and keep the
-  sibling `meetlite` and `meetlite-gui` binaries together, then run
-  `./meetlite-gui`.
+```bash
+curl -fsSL https://github.com/podocarp/meetlite/releases/latest/download/install.sh | sh -s -- --cli-only
+```
+
+The same artifacts remain available for manual installation:
+
+- macOS Apple Silicon: `Meetlite-macos-aarch64.app.zip`.
+- Linux x86_64: `meetlite-gui-linux-x86_64.tar.gz`; keep `meetlite` and
+  `meetlite-gui` together.
 
 Neither Linux tarball is self-contained. Both require compatible glibc,
 PulseAudio or ALSA, and CA certificates; the GUI tarball additionally requires

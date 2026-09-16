@@ -104,8 +104,9 @@ Lifecycle events, not process liveness or stderr text, determine Recording, Proc
 
 ## Package Layouts
 
-The existing terminal distributions remain available. The curl installer remains
-CLI-only; users download GUI assets separately from GitHub Releases.
+The existing terminal distributions remain available. The curl installer uses
+the GUI assets by default so the sibling CLI is installed with the GUI;
+`--cli-only` selects the legacy CLI archives.
 
 macOS build output:
 

@@ -24,6 +24,8 @@ jobs:
           cargo test --locked
           cargo build --release --locked --bin meetlite --bin meetlite-gui
           BASH
+      - name: Test installer modes
+        run: bash scripts/test-install.sh
       - name: Package Linux CLI and GUI
         run: |
           nix develop --command bash <<'BASH'

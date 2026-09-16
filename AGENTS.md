@@ -56,7 +56,8 @@
   `meetlite-gui-linux-x86_64.tar.gz`; the GUI tarball contains sibling
   `meetlite` and `meetlite-gui` binaries and is not self-contained. Preserve
   the existing CLI, capture-app, and signed manifest assets and names for legacy
-  clients, CLI-only installers, and capture-agent updaters.
+  clients, `--cli-only` installs, and capture-agent updaters. The default
+  installer installs both CLI and GUI.
 - The capture manifest payload must remain exactly:
 
   ```text
